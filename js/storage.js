@@ -34,13 +34,61 @@ const YTM_Storage = {
     }
   },
 
-  async getBookmarks() {
+  // --- bookmarks, keyed by video id — { "<videoId>": [clip, ...] } -------
+
+  async getAllBookmarks() {
     return this._get('bookmarks', {});
   },
 
-  async saveBookmarks(bookmarks) {
+  async saveAllBookmarks(bookmarks) {
     await this._set({ bookmarks });
   },
+
+  async getBookmarksForVideo(videoId) {
+    const all = await this.getAllBookmarks();
+    return all[videoId] || [];
+  },
+
+  async saveBookmarksForVideo(videoId, clips) {
+    const all = await this.getAllBookmarks();
+    if (clips && clips.length > 0) {
+      all[videoId] = clips;
+    } else {
+      delete all[videoId];
+    }
+    await this._set({ bookmarks: all });
+    await this.touchVideo(videoId);
+  },
+
+  async getLastModifiedByVideoId() {
+    return this._get('lastModifiedByVideoId', {});
+  },
+
+  async saveLastModifiedByVideoId(map) {
+    await this._set({ lastModifiedByVideoId: map });
+  },
+
+  async touchVideo(videoId) {
+    const map = await this.getLastModifiedByVideoId();
+    map[videoId] = Date.now();
+    await this.saveLastModifiedByVideoId(map);
+  },
+
+  // Local-only title/channel cache, keyed by video id — never synced, since
+  // the Gist payload only stores clip data. Populated whenever the content
+  // script visits a video or a quick-add reads its page metadata.
+  async getVideoMeta(videoId) {
+    const all = await this._get('videoMeta', {});
+    return all[videoId] || null;
+  },
+
+  async saveVideoMeta(videoId, meta) {
+    const all = await this._get('videoMeta', {});
+    all[videoId] = meta;
+    await this._set({ videoMeta: all });
+  },
+
+  // --- settings (local only: token, gist id) ------------------------------
 
   async getSettings() {
     return this._get('settings', { token: '', gistId: '', lastSyncedAt: null });
@@ -50,8 +98,8 @@ const YTM_Storage = {
     await this._set({ settings });
   },
 
-  // Preferences (e.g. autoplay) are synced through the Gist, unlike settings
-  // (token/gistId), which stay local to each browser.
+  // --- preferences (synced through the Gist, e.g. autoplay) --------------
+
   async getPreferences() {
     return this._get('preferences', { autoplay: true, updatedAt: 0 });
   },
@@ -59,6 +107,8 @@ const YTM_Storage = {
   async savePreferences(preferences) {
     await this._set({ preferences });
   },
+
+  // --- cross-tab "play this bookmark on load" handoff --------------------
 
   async getPendingPlay() {
     return this._get('pendingPlay', null);

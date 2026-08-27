@@ -45,6 +45,7 @@ button.danger { color: #dc2626; border-color: #dc2626; }
 #videoList { max-height: 460px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
 
 .video-group { border: 1px solid var(--border); border-radius: 8px; padding: 8px; }
+#videoHeader { border: 1px solid var(--border); border-radius: 8px; padding: 8px; margin-bottom: 10px; }
 .video-header { display: flex; gap: 8px; margin-bottom: 6px; }
 .video-header img { width: 80px; height: 45px; object-fit: cover; border-radius: 4px; flex-shrink: 0; background: var(--border); }
 .video-meta { min-width: 0; flex: 1; }

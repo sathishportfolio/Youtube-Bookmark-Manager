@@ -21,19 +21,11 @@ chrome.runtime.onInstalled.addListener(() => {
   });
 });
 
-async function hasPendingClip(videoId) {
-  if (!videoId) return false;
-  const bookmarks = await YTM_Storage.getBookmarks();
-  return Object.values(bookmarks).some(
-    (b) => b.videoId === videoId && b.startTime != null && b.endTime == null
-  );
-}
-
 async function updateEndMenuVisibility(tabId) {
   try {
     const tab = await chrome.tabs.get(tabId);
     const videoId = YTM_Youtube.extractVideoId(tab.url || '');
-    const visible = await hasPendingClip(videoId);
+    const visible = videoId ? await YTM_Bookmarks.hasPendingClip(videoId) : false;
     await chrome.contextMenus.update(END_MENU_ID, { visible });
   } catch {
     // Tab may have closed or not be a YouTube page; ignore.
@@ -52,24 +44,15 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
 
 async function quickStart(videoId, tabId) {
   const meta = await YTM_Youtube.readPageMetadata(tabId);
-  const bookmark = YTM_Bookmarks.makeBookmark(
+  await YTM_Bookmarks.addClip(
     { videoId, title: meta.title, channel: meta.channel },
     { start: meta.currentTime || 0 }
   );
-  const bookmarks = await YTM_Storage.getBookmarks();
-  bookmarks[bookmark.id] = bookmark;
-  await YTM_Storage.saveBookmarks(bookmarks);
 }
 
 async function quickEnd(videoId, tabId) {
-  const bookmarks = await YTM_Storage.getBookmarks();
-  const pending = Object.values(bookmarks)
-    .filter((b) => b.videoId === videoId && b.startTime != null && b.endTime == null)
-    .sort((a, b) => b.createdAt - a.createdAt)[0];
-  if (!pending) return;
-
   const meta = await YTM_Youtube.readPageMetadata(tabId);
-  await YTM_Bookmarks.markEnd(pending.id, meta.currentTime || 0);
+  await YTM_Bookmarks.completePendingClip(videoId, meta.currentTime || 0);
 }
 
 function flashBadge() {

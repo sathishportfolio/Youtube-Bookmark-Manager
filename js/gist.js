@@ -34,18 +34,23 @@ const YTM_Gist = {
     return gist.id;
   },
 
-  // Returns { bookmarks, preferences } — the gist file holds both so
-  // preferences like Autoplay follow the user across devices too.
+  // Returns { bookmarks, lastModifiedByVideoId, preferences } — the gist
+  // file holds all three so Autoplay and per-video clip data both follow
+  // the user across devices.
   async fetchData(token, gistId) {
     const gist = await this.request(`/gists/${gistId}`, token);
     const file = gist.files[this.FILE_NAME];
-    if (!file) return { bookmarks: {}, preferences: {} };
+    if (!file) return { bookmarks: {}, lastModifiedByVideoId: {}, preferences: {} };
     const content = file.truncated ? await (await fetch(file.raw_url)).text() : file.content;
     try {
       const data = JSON.parse(content);
-      return { bookmarks: data.bookmarks || {}, preferences: data.preferences || {} };
+      return {
+        bookmarks: data.bookmarks || {},
+        lastModifiedByVideoId: data.lastModifiedByVideoId || {},
+        preferences: data.preferences || {}
+      };
     } catch {
-      return { bookmarks: {}, preferences: {} };
+      return { bookmarks: {}, lastModifiedByVideoId: {}, preferences: {} };
     }
   },
 
@@ -58,16 +63,23 @@ const YTM_Gist = {
     });
   },
 
-  // Last-write-wins merge keyed by each bookmark's updatedAt timestamp.
-  mergeBookmarks(local, remote) {
-    const merged = { ...remote };
-    for (const [id, bookmark] of Object.entries(local)) {
-      const existing = merged[id];
-      if (!existing || (bookmark.updatedAt || 0) >= (existing.updatedAt || 0)) {
-        merged[id] = bookmark;
+  // Merge is per video, not per clip: whichever side has the newer
+  // lastModifiedByVideoId timestamp for a given video wins that video's
+  // whole clip array. Keeps the payload small and the merge simple.
+  mergeBookmarks(local, localLMB, remote, remoteLMB) {
+    const bookmarks = { ...remote };
+    const lastModifiedByVideoId = { ...remoteLMB };
+
+    for (const videoId of Object.keys(local)) {
+      const localTime = localLMB[videoId] || 0;
+      const remoteTime = remoteLMB[videoId] || 0;
+      if (localTime >= remoteTime) {
+        bookmarks[videoId] = local[videoId];
+        lastModifiedByVideoId[videoId] = localTime;
       }
     }
-    return merged;
+
+    return { bookmarks, lastModifiedByVideoId };
   },
 
   mergePreferences(local, remote) {

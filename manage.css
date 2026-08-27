@@ -1,6 +1,6 @@
 body.manage-page {
   width: auto;
-  max-width: 920px;
+  max-width: 760px;
   margin: 0 auto;
   padding: 28px;
 }
@@ -9,7 +9,22 @@ body.manage-page h1 {
 }
 body.manage-page #videoList {
   max-height: none;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
-  align-items: start;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+body.manage-page .video-thumb-toggle {
+  cursor: pointer;
+}
+body.manage-page .video-thumb-toggle:hover {
+  opacity: 0.85;
+}
+body.manage-page .video-clip-count {
+  color: var(--muted);
+  font-size: 11px;
+}
+body.manage-page .video-details {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
 }

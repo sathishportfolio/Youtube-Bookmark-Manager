@@ -74,7 +74,7 @@ const YTM_Row = {
     notesInput.type = 'text';
     notesInput.className = 'ytm-notes-input';
     notesInput.placeholder = 'Label';
-    notesInput.value = bookmark.notes || '';
+    notesInput.value = bookmark.label || '';
 
     const originalRange = rangeInput.value;
     const originalNotes = notesInput.value;
@@ -193,7 +193,7 @@ const YTM_Row = {
 
     const label = document.createElement('span');
     label.className = 'ytm-label-text';
-    label.textContent = bookmark.notes || '';
+    label.textContent = bookmark.label || '';
 
     const deleteBtn = document.createElement('button');
     deleteBtn.type = 'button';

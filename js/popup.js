@@ -1,5 +1,6 @@
-let bookmarksCache = {};
-const isLibraryPage = document.body.classList.contains('manage-page');
+let currentTab = null;
+let currentVideoId = null;
+let clipsCache = [];
 
 function setStatus(msg, isError = false) {
   const el = document.getElementById('statusMsg');
@@ -8,283 +9,100 @@ function setStatus(msg, isError = false) {
   el.classList.toggle('error', isError);
 }
 
-function groupByVideo(bookmarks) {
-  const groups = new Map();
-  for (const b of bookmarks) {
-    if (!groups.has(b.videoId)) groups.set(b.videoId, []);
-    groups.get(b.videoId).push(b);
-  }
-  for (const clips of groups.values()) {
-    clips.sort((a, b) => (a.startTime || 0) - (b.startTime || 0));
-  }
-  return groups;
-}
-
 function matchesFilter(bookmark, query) {
   if (!query) return true;
-  const haystack = [bookmark.title, bookmark.channel, bookmark.notes].join(' ').toLowerCase();
+  const haystack = [bookmark.title, bookmark.channel, bookmark.label].join(' ').toLowerCase();
   return haystack.includes(query.toLowerCase());
 }
 
-async function findTabForVideo(videoId) {
-  const tabs = await chrome.tabs.query({ url: '*://*.youtube.com/watch*' });
-  return tabs.find((t) => YTM_Youtube.extractVideoId(t.url) === videoId) || null;
-}
-
-async function getCurrentTimeForTab(tabId) {
-  try {
-    const [{ result }] = await chrome.scripting.executeScript({
-      target: { tabId },
-      func: () => {
-        const v = document.querySelector('video.html5-main-video');
-        return v ? v.currentTime : null;
-      }
-    });
-    return result;
-  } catch {
-    return null;
-  }
-}
-
 async function jumpToBookmark(bookmark, point = 'start') {
-  const tab = await findTabForVideo(bookmark.videoId);
-  if (tab) {
-    await chrome.tabs
-      .sendMessage(tab.id, { type: 'ytm-play-from', videoId: bookmark.videoId, bookmarkId: bookmark.id, point })
-      .catch(() => {});
-    await chrome.tabs.update(tab.id, { active: true });
-    await chrome.windows.update(tab.windowId, { focused: true });
-  } else {
-    const time = point === 'end' && bookmark.endTime != null ? bookmark.endTime : bookmark.startTime;
-    await YTM_Storage.setPendingPlay({ videoId: bookmark.videoId, bookmarkId: bookmark.id, point });
-    await chrome.tabs.create({ url: `${bookmark.url}&t=${Math.floor(time)}s` });
-  }
+  if (!currentTab) return;
+  await chrome.tabs
+    .sendMessage(currentTab.id, { type: 'ytm-play-from', videoId: bookmark.videoId, bookmarkId: bookmark.id, point })
+    .catch(() => {});
 }
 
-function buildAddRow(videoMeta) {
-  const wrap = document.createElement('div');
-  wrap.className = 'ytm-add-row';
-
-  const input = document.createElement('input');
-  input.type = 'text';
-  input.className = 'ytm-add-input';
-  input.placeholder = '1:10 or 1:10-2:00';
-  input.spellcheck = false;
-
-  const labelInput = document.createElement('input');
-  labelInput.type = 'text';
-  labelInput.className = 'ytm-add-label-input';
-  labelInput.placeholder = 'Label';
-  labelInput.spellcheck = false;
-
-  const addBtn = document.createElement('button');
-  addBtn.type = 'button';
-  addBtn.className = 'ytm-btn';
-  addBtn.textContent = 'Add';
-
-  const submit = async () => {
-    const result = await YTM_Bookmarks.addManual(videoMeta, input.value, labelInput.value);
-    if (result.ok) {
-      input.value = '';
-      labelInput.value = '';
-      renderList();
-    } else {
-      input.classList.add('ytm-input-error');
-      setTimeout(() => input.classList.remove('ytm-input-error'), 1500);
-    }
-  };
-  addBtn.addEventListener('click', submit);
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') submit();
-  });
-  labelInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') submit();
-  });
-
-  wrap.append(input, labelInput, addBtn);
-  return wrap;
-}
-
-function buildBulkControls(videoMeta, clips) {
-  const bar = document.createElement('div');
-  bar.className = 'group-toolbar';
-
-  const rawBtn = document.createElement('button');
-  rawBtn.type = 'button';
-  rawBtn.className = 'ytm-btn';
-  rawBtn.textContent = 'Raw text';
-
-  const copyBtn = document.createElement('button');
-  copyBtn.type = 'button';
-  copyBtn.className = 'ytm-btn';
-  copyBtn.textContent = 'Copy all';
-  copyBtn.addEventListener('click', async () => {
-    try {
-      await navigator.clipboard.writeText(YTM_Bookmarks.exportRawText(clips));
-      const original = copyBtn.textContent;
-      copyBtn.textContent = 'Copied!';
-      setTimeout(() => {
-        copyBtn.textContent = original;
-      }, 1200);
-    } catch {
-      // Ignore clipboard write failures.
-    }
-  });
-
-  const editorWrap = document.createElement('div');
-  editorWrap.className = 'raw-editor-wrap';
-  editorWrap.hidden = true;
-
-  const editor = document.createElement('textarea');
-  editor.className = 'ytm-raw-editor';
-  editor.spellcheck = false;
-
-  const actionsRow = document.createElement('div');
-  actionsRow.className = 'ytm-raw-actions';
-
-  const applyBtn = document.createElement('button');
-  applyBtn.type = 'button';
-  applyBtn.className = 'ytm-btn';
-  applyBtn.textContent = 'Apply';
-  applyBtn.addEventListener('click', async () => {
-    await YTM_Bookmarks.applyRawText(videoMeta, editor.value);
-    editorWrap.hidden = true;
-    renderList();
-  });
-
-  const cancelBtn = document.createElement('button');
-  cancelBtn.type = 'button';
-  cancelBtn.className = 'ytm-btn';
-  cancelBtn.textContent = 'Cancel';
-  cancelBtn.addEventListener('click', () => {
-    editorWrap.hidden = true;
-  });
-
-  rawBtn.addEventListener('click', () => {
-    if (editorWrap.hidden) editor.value = YTM_Bookmarks.exportRawText(clips);
-    editorWrap.hidden = !editorWrap.hidden;
-  });
-
-  actionsRow.append(applyBtn, cancelBtn);
-  editorWrap.append(editor, actionsRow);
-  bar.append(rawBtn, copyBtn);
-
-  return { bar, editorWrap };
-}
-
-async function renderVideoGroup(videoId, clips) {
-  const first = clips[0];
-  const videoMeta = { videoId, title: first.title, channel: first.channel };
-
-  const group = document.createElement('section');
-  group.className = 'video-group';
-
-  const header = document.createElement('div');
-  header.className = 'video-header';
+function renderVideoHeader(meta) {
+  const header = document.getElementById('videoHeader');
+  header.innerHTML = '';
+  header.hidden = false;
 
   const img = document.createElement('img');
-  img.src = first.thumbnail;
+  img.src = meta.thumbnail;
   img.alt = '';
 
-  const meta = document.createElement('div');
-  meta.className = 'video-meta';
+  const info = document.createElement('div');
+  info.className = 'video-meta';
   const title = document.createElement('a');
-  title.href = first.url;
+  title.href = meta.url;
   title.target = '_blank';
-  title.textContent = first.title;
+  title.textContent = meta.title;
   const channel = document.createElement('div');
   channel.className = 'video-channel';
-  channel.textContent = first.channel;
-  meta.append(title, channel);
+  channel.textContent = meta.channel;
+  info.append(title, channel);
 
-  header.append(img, meta);
-
-  const clipList = document.createElement('ul');
-  clipList.className = 'clip-list';
-
-  if (isLibraryPage) {
-    const tab = await findTabForVideo(videoId);
-    const rowActions = {
-      canMarkTime: !!tab,
-      onToggleFavorite: async (b) => {
-        await YTM_Bookmarks.toggleFavorite(b.id);
-        renderList();
-      },
-      onPlayFrom: async (b, point) => {
-        await jumpToBookmark(b, point);
-      },
-      onMarkStart: async (b) => {
-        if (!tab) return { ok: false, message: 'Open the video to mark from playback.' };
-        const time = await getCurrentTimeForTab(tab.id);
-        const result = await YTM_Bookmarks.markStart(b.id, time);
-        if (result.ok) renderList();
-        return result;
-      },
-      onMarkEnd: async (b) => {
-        if (!tab) return { ok: false, message: 'Open the video to mark from playback.' };
-        const time = await getCurrentTimeForTab(tab.id);
-        const result = await YTM_Bookmarks.markEnd(b.id, time);
-        if (result.ok) renderList();
-        return result;
-      },
-      onSave: async (b, rangeText, notesText) => {
-        const result = await YTM_Bookmarks.saveEdits(b.id, rangeText, notesText);
-        if (result.ok) renderList();
-        return result;
-      },
-      onDelete: async (b) => {
-        await YTM_Bookmarks.remove(b.id);
-        renderList();
-      }
-    };
-
-    for (const clip of YTM_Bookmarks.sortForDisplay(clips)) {
-      clipList.appendChild(YTM_Row.render(clip, rowActions));
-    }
-
-    const bulk = buildBulkControls(videoMeta, clips);
-    group.append(header, buildAddRow(videoMeta), bulk.bar, bulk.editorWrap, clipList);
-  } else {
-    const minimalActions = {
-      onPlayFrom: async (b, point) => {
-        await jumpToBookmark(b, point);
-      },
-      onDelete: async (b) => {
-        await YTM_Bookmarks.remove(b.id);
-        renderList();
-      }
-    };
-
-    for (const clip of YTM_Bookmarks.sortForDisplay(clips)) {
-      clipList.appendChild(YTM_Row.renderMinimal(clip, minimalActions));
-    }
-
-    group.append(header, clipList);
-  }
-
-  return group;
+  header.append(img, info);
 }
 
-async function renderList() {
-  const container = document.getElementById('videoList');
+function renderClipList() {
+  const list = document.getElementById('videoList');
   const query = document.getElementById('searchInput').value.trim();
-  container.innerHTML = '';
+  list.innerHTML = '';
 
-  const all = Object.values(bookmarksCache);
-  const filtered = all.filter((b) => matchesFilter(b, query));
-  const groups = groupByVideo(filtered);
+  const filtered = clipsCache.filter((b) => matchesFilter(b, query));
+  document.getElementById('emptyState').hidden = clipsCache.length > 0;
 
-  document.getElementById('emptyState').hidden = all.length > 0;
+  const minimalActions = {
+    onPlayFrom: async (b, point) => {
+      await jumpToBookmark(b, point);
+    },
+    onDelete: async (b) => {
+      await YTM_Bookmarks.remove(b.id);
+      await loadCurrentVideo();
+    }
+  };
 
-  const sortedVideoIds = [...groups.keys()].sort((a, b) => {
-    const aLatest = Math.max(...groups.get(a).map((c) => c.updatedAt || 0));
-    const bLatest = Math.max(...groups.get(b).map((c) => c.updatedAt || 0));
-    return bLatest - aLatest;
+  for (const clip of YTM_Bookmarks.sortForDisplay(filtered)) {
+    list.appendChild(YTM_Row.renderMinimal(clip, minimalActions));
+  }
+}
+
+async function loadCurrentVideo() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  currentTab = tab || null;
+  currentVideoId = tab?.url ? YTM_Youtube.extractVideoId(tab.url) : null;
+
+  const notOnVideo = document.getElementById('notOnVideo');
+  const videoHeader = document.getElementById('videoHeader');
+  const controls = document.getElementById('controls');
+  const list = document.getElementById('videoList');
+
+  if (!currentVideoId) {
+    notOnVideo.hidden = false;
+    videoHeader.hidden = true;
+    controls.hidden = true;
+    list.innerHTML = '';
+    document.getElementById('emptyState').hidden = true;
+    clipsCache = [];
+    return;
+  }
+
+  notOnVideo.hidden = true;
+  controls.hidden = false;
+
+  clipsCache = await YTM_Bookmarks.getClipsForVideo(currentVideoId);
+  const cachedMeta = await YTM_Storage.getVideoMeta(currentVideoId);
+  const fallbackTitle = (currentTab.title || '').replace(/ - YouTube$/, '');
+
+  renderVideoHeader({
+    thumbnail: YTM_Bookmarks.thumbnailUrl(currentVideoId),
+    url: YTM_Bookmarks.videoUrl(currentVideoId),
+    title: cachedMeta?.title || fallbackTitle || currentVideoId,
+    channel: cachedMeta?.channel || ''
   });
 
-  for (const videoId of sortedVideoIds) {
-    container.appendChild(await renderVideoGroup(videoId, groups.get(videoId)));
-  }
+  renderClipList();
 }
 
 async function refreshAutoplayButton() {
@@ -307,23 +125,36 @@ async function syncNow() {
 
   setStatus('Syncing…');
   try {
+    const localBookmarks = await YTM_Storage.getAllBookmarks();
+    const localLMB = await YTM_Storage.getLastModifiedByVideoId();
     const localPrefs = await YTM_Storage.getPreferences();
     let gistId = settings.gistId;
 
     if (!gistId) {
-      gistId = await YTM_Gist.createGist(settings.token, { bookmarks: bookmarksCache, preferences: localPrefs });
+      gistId = await YTM_Gist.createGist(settings.token, {
+        bookmarks: localBookmarks,
+        lastModifiedByVideoId: localLMB,
+        preferences: localPrefs
+      });
     } else {
       const remote = await YTM_Gist.fetchData(settings.token, gistId);
-      bookmarksCache = YTM_Gist.mergeBookmarks(bookmarksCache, remote.bookmarks);
+      const merged = YTM_Gist.mergeBookmarks(localBookmarks, localLMB, remote.bookmarks, remote.lastModifiedByVideoId);
       const mergedPrefs = YTM_Gist.mergePreferences(localPrefs, remote.preferences);
-      await YTM_Storage.saveBookmarks(bookmarksCache);
+
+      await YTM_Storage.saveAllBookmarks(merged.bookmarks);
+      await YTM_Storage.saveLastModifiedByVideoId(merged.lastModifiedByVideoId);
       await YTM_Storage.savePreferences(mergedPrefs);
-      await YTM_Gist.pushData(settings.token, gistId, { bookmarks: bookmarksCache, preferences: mergedPrefs });
+
+      await YTM_Gist.pushData(settings.token, gistId, {
+        bookmarks: merged.bookmarks,
+        lastModifiedByVideoId: merged.lastModifiedByVideoId,
+        preferences: mergedPrefs
+      });
     }
 
     await YTM_Storage.saveSettings({ ...settings, gistId, lastSyncedAt: Date.now() });
     await refreshAutoplayButton();
-    renderList();
+    await loadCurrentVideo();
     setStatus('Synced.');
   } catch (err) {
     setStatus(err.message, true);
@@ -331,15 +162,18 @@ async function syncNow() {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
-  bookmarksCache = await YTM_Storage.getBookmarks();
-  renderList();
+  await loadCurrentVideo();
   refreshAutoplayButton();
 
   document.getElementById('autoplayBtn').addEventListener('click', toggleAutoplay);
   document.getElementById('syncBtn').addEventListener('click', syncNow);
   document.getElementById('optionsBtn').addEventListener('click', () => chrome.runtime.openOptionsPage());
-  document.getElementById('searchInput').addEventListener('input', renderList);
+  document.getElementById('searchInput').addEventListener('input', renderClipList);
   document.getElementById('manageBtn')?.addEventListener('click', () => {
     chrome.tabs.create({ url: chrome.runtime.getURL('manage.html') });
+  });
+
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && changes.bookmarks) loadCurrentVideo();
   });
 });

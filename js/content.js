@@ -28,16 +28,8 @@
   }
 
   async function getBookmarksForCurrentVideo() {
-    const all = await YTM_Storage.getBookmarks();
-    return YTM_Bookmarks.sortForDisplay(
-      Object.values(all).filter((b) => b.videoId === currentVideoId)
-    );
-  }
-
-  function findPending(clips) {
-    return clips
-      .filter((b) => b.startTime != null && b.endTime == null)
-      .sort((a, b) => b.createdAt - a.createdAt)[0] || null;
+    const clips = await YTM_Bookmarks.getClipsForVideo(currentVideoId);
+    return YTM_Bookmarks.sortForDisplay(clips);
   }
 
   // --- playback -----------------------------------------------------
@@ -144,31 +136,15 @@
   async function handleStart() {
     if (!video || !currentVideoId) return;
     const meta = readMetadata();
-    const bookmark = YTM_Bookmarks.makeBookmark(meta, { start: video.currentTime });
-    const all = await YTM_Storage.getBookmarks();
-    all[bookmark.id] = bookmark;
-    await YTM_Storage.saveBookmarks(all);
+    await YTM_Bookmarks.addClip(meta, { start: video.currentTime });
     await refreshPanel();
     scheduleMarkerRender();
   }
 
   async function handleEnd() {
     if (!video || !currentVideoId) return;
-    const all = await YTM_Storage.getBookmarks();
-    const mine = Object.values(all).filter((b) => b.videoId === currentVideoId);
-    const pending = findPending(mine);
-    if (!pending) return;
-
-    let end = video.currentTime;
-    if (end < pending.startTime) {
-      const tmp = pending.startTime;
-      pending.startTime = end;
-      end = tmp;
-    }
-    pending.endTime = end;
-    pending.updatedAt = Date.now();
-    all[pending.id] = pending;
-    await YTM_Storage.saveBookmarks(all);
+    const updated = await YTM_Bookmarks.completePendingClip(currentVideoId, video.currentTime);
+    if (!updated) return;
     await refreshPanel();
     scheduleMarkerRender();
   }
@@ -368,7 +344,7 @@
     if (!panel) return;
 
     const clips = await getBookmarksForCurrentVideo();
-    const pending = findPending(clips);
+    const pending = await YTM_Bookmarks.findPendingClip(currentVideoId);
 
     const endBtn = panel.querySelector('.ytm-btn-end');
     const hint = panel.querySelector('.ytm-hint');
@@ -426,7 +402,7 @@
     const tip = ensureTooltip();
     const range = YTM_Bookmarks.formatRangeText(bookmark);
     tip.innerHTML = `<strong>${escapeHtml(range)}</strong>${
-      bookmark.notes ? `<br>${escapeHtml(bookmark.notes)}` : ''
+      bookmark.label ? `<br>${escapeHtml(bookmark.label)}` : ''
     }`;
     const rect = anchorEl.getBoundingClientRect();
     tip.style.left = `${rect.left + rect.width / 2}px`;
@@ -504,6 +480,9 @@
       setTimeout(setup, 500);
       return;
     }
+
+    const meta = readMetadata();
+    YTM_Bookmarks.rememberVideoMeta(currentVideoId, meta.title, meta.channel);
 
     refreshPanel();
     renderMarkers();

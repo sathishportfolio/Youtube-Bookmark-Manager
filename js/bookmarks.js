@@ -1,5 +1,91 @@
+// Each clip is stored as { startTime, endTime, label, favorite, createdAt,
+// updatedAt } inside YTM_Storage's per-video bookmarks map — no id,
+// videoId, url, title, channel, or thumbnail on the stored object itself
+// (those are implied by the video's key, or cheaply derivable/cached).
+// For the UI, clips are "decorated" with a synthetic id (videoId::createdAt)
+// plus the derived/cached display fields, so the rest of the app can keep
+// treating a clip as one self-contained object.
 const YTM_Bookmarks = {
   DUP_START_EPSILON: 0.5,
+
+  makeId(videoId, createdAt) {
+    return `${videoId}::${createdAt}`;
+  },
+
+  parseId(id) {
+    const i = id.lastIndexOf('::');
+    if (i === -1) return null;
+    return { videoId: id.slice(0, i), createdAt: Number(id.slice(i + 2)) };
+  },
+
+  thumbnailUrl(videoId) {
+    return YTM_Youtube.thumbnailUrl(videoId);
+  },
+
+  videoUrl(videoId) {
+    return `https://www.youtube.com/watch?v=${videoId}`;
+  },
+
+  decorate(videoId, clip, meta) {
+    return {
+      id: this.makeId(videoId, clip.createdAt),
+      videoId,
+      url: this.videoUrl(videoId),
+      title: (meta && meta.title) || videoId,
+      channel: (meta && meta.channel) || '',
+      thumbnail: this.thumbnailUrl(videoId),
+      startTime: clip.startTime,
+      endTime: clip.endTime,
+      label: clip.label || '',
+      favorite: !!clip.favorite,
+      createdAt: clip.createdAt,
+      updatedAt: clip.updatedAt
+    };
+  },
+
+  async getClipsForVideo(videoId) {
+    const [clips, meta] = await Promise.all([
+      YTM_Storage.getBookmarksForVideo(videoId),
+      YTM_Storage.getVideoMeta(videoId)
+    ]);
+    return clips.map((c) => this.decorate(videoId, c, meta));
+  },
+
+  // For the Library page: every video that has at least one clip, each
+  // with its clips already decorated.
+  async getAllVideoGroups() {
+    const all = await YTM_Storage.getAllBookmarks();
+    const groups = [];
+    for (const [videoId, clips] of Object.entries(all)) {
+      if (!clips || clips.length === 0) continue;
+      const meta = await YTM_Storage.getVideoMeta(videoId);
+      groups.push({
+        videoId,
+        title: (meta && meta.title) || videoId,
+        channel: (meta && meta.channel) || '',
+        thumbnail: this.thumbnailUrl(videoId),
+        url: this.videoUrl(videoId),
+        clips: clips.map((c) => this.decorate(videoId, c, meta)),
+        lastUpdated: Math.max(0, ...clips.map((c) => c.updatedAt || 0))
+      });
+    }
+    return groups;
+  },
+
+  async findPendingClip(videoId) {
+    const clips = await YTM_Storage.getBookmarksForVideo(videoId);
+    const pending = clips
+      .filter((c) => c.startTime != null && c.endTime == null)
+      .sort((a, b) => b.createdAt - a.createdAt)[0];
+    return pending ? this.decorate(videoId, pending, await YTM_Storage.getVideoMeta(videoId)) : null;
+  },
+
+  async hasPendingClip(videoId) {
+    const clips = await YTM_Storage.getBookmarksForVideo(videoId);
+    return clips.some((c) => c.startTime != null && c.endTime == null);
+  },
+
+  // --- time parsing/formatting -------------------------------------------
 
   parseTime(token) {
     if (!token) return null;
@@ -47,13 +133,6 @@ const YTM_Bookmarks = {
     return `${s}sec`;
   },
 
-  sortByStart(clips) {
-    return clips
-      .filter((b) => b.startTime != null)
-      .slice()
-      .sort((a, b) => a.startTime - b.startTime);
-  },
-
   parseRawLine(line) {
     const favMatch = line.match(/^\*\s*/);
     const favorite = !!favMatch;
@@ -62,13 +141,13 @@ const YTM_Bookmarks = {
     if (!m) return null;
     const range = this.parseRangeText(m[1]);
     if (!range) return null;
-    return { favorite, start: range.start, end: range.end, notes: (m[2] || '').trim() };
+    return { favorite, start: range.start, end: range.end, label: (m[2] || '').trim() };
   },
 
   formatRawLine(bookmark) {
     const prefix = bookmark.favorite ? '* ' : '';
-    const notes = bookmark.notes ? ` ${bookmark.notes}` : '';
-    return `${prefix}${this.formatRangeText(bookmark)}${notes}`;
+    const label = bookmark.label ? ` ${bookmark.label}` : '';
+    return `${prefix}${this.formatRangeText(bookmark)}${label}`;
   },
 
   exportRawText(clips) {
@@ -79,123 +158,147 @@ const YTM_Bookmarks = {
       .join('\n');
   },
 
+  sortByStart(clips) {
+    return clips
+      .filter((b) => b.startTime != null)
+      .slice()
+      .sort((a, b) => a.startTime - b.startTime);
+  },
+
   // Display order is always chronological — favoriting a clip marks it,
   // it doesn't move it.
   sortForDisplay(clips) {
     return clips.slice().sort((a, b) => (a.startTime || 0) - (b.startTime || 0));
   },
 
-  makeBookmark(videoMeta, { start, end = null, notes = '', favorite = false }) {
+  // --- mutations -----------------------------------------------------
+
+  makeClip({ start, end = null, label = '', favorite = false }) {
     const now = Date.now();
-    return {
-      id: `${videoMeta.videoId}-${now}-${Math.floor(Math.random() * 1000)}`,
-      videoId: videoMeta.videoId,
-      url: `https://www.youtube.com/watch?v=${videoMeta.videoId}`,
-      title: videoMeta.title || 'Untitled video',
-      channel: videoMeta.channel || '',
-      thumbnail: YTM_Youtube.thumbnailUrl(videoMeta.videoId),
-      startTime: start,
-      endTime: end,
-      notes,
-      favorite,
-      createdAt: now,
-      updatedAt: now
-    };
+    return { startTime: start, endTime: end, label, favorite, createdAt: now, updatedAt: now };
+  },
+
+  async rememberVideoMeta(videoId, title, channel) {
+    if (!title && !channel) return;
+    await YTM_Storage.saveVideoMeta(videoId, { title: title || videoId, channel: channel || '' });
+  },
+
+  async addClip(videoMeta, { start, end = null, label = '', favorite = false }) {
+    await this.rememberVideoMeta(videoMeta.videoId, videoMeta.title, videoMeta.channel);
+    const clips = await YTM_Storage.getBookmarksForVideo(videoMeta.videoId);
+    const clip = this.makeClip({ start, end, label, favorite });
+    clips.push(clip);
+    await YTM_Storage.saveBookmarksForVideo(videoMeta.videoId, clips);
+    return this.decorate(videoMeta.videoId, clip, { title: videoMeta.title, channel: videoMeta.channel });
+  },
+
+  async addManual(videoMeta, rangeText, labelText) {
+    const range = this.parseRangeText(rangeText);
+    if (!range) return { ok: false, message: 'Enter a time like 1:10 or 1:10-2:00.' };
+    const clip = await this.addClip(videoMeta, { start: range.start, end: range.end, label: labelText });
+    return { ok: true, clip };
+  },
+
+  async completePendingClip(videoId, currentTime) {
+    const clips = await YTM_Storage.getBookmarksForVideo(videoId);
+    const idx = clips
+      .map((c, i) => [c, i])
+      .filter(([c]) => c.startTime != null && c.endTime == null)
+      .sort((a, b) => b[0].createdAt - a[0].createdAt)[0]?.[1];
+    if (idx == null) return null;
+
+    const clip = clips[idx];
+    let start = clip.startTime;
+    let end = currentTime;
+    if (end < start) {
+      [start, end] = [end, start];
+    }
+    clip.startTime = start;
+    clip.endTime = end;
+    clip.updatedAt = Date.now();
+    await YTM_Storage.saveBookmarksForVideo(videoId, clips);
+    return clip;
+  },
+
+  async _withClip(id, mutator) {
+    const parsed = this.parseId(id);
+    if (!parsed) return { ok: false, message: 'Bookmark not found.' };
+    const clips = await YTM_Storage.getBookmarksForVideo(parsed.videoId);
+    const idx = clips.findIndex((c) => c.createdAt === parsed.createdAt);
+    if (idx === -1) return { ok: false, message: 'Bookmark not found.' };
+
+    const result = mutator(clips[idx]);
+    if (result && result.ok === false) return result;
+
+    clips[idx].updatedAt = Date.now();
+    await YTM_Storage.saveBookmarksForVideo(parsed.videoId, clips);
+    return { ok: true };
   },
 
   async toggleFavorite(id) {
-    const all = await YTM_Storage.getBookmarks();
-    const b = all[id];
-    if (!b) return;
-    b.favorite = !b.favorite;
-    b.updatedAt = Date.now();
-    await YTM_Storage.saveBookmarks(all);
+    return this._withClip(id, (clip) => {
+      clip.favorite = !clip.favorite;
+    });
   },
 
   async markStart(id, currentTime) {
     if (currentTime == null) return { ok: false, message: 'Open the video to mark from playback.' };
-    const all = await YTM_Storage.getBookmarks();
-    const b = all[id];
-    if (!b) return { ok: false, message: 'Bookmark not found.' };
-    const dup = Object.values(all).some(
-      (o) =>
-        o.id !== id &&
-        o.videoId === b.videoId &&
-        o.startTime != null &&
-        Math.abs(o.startTime - currentTime) < this.DUP_START_EPSILON
+    const parsed = this.parseId(id);
+    if (!parsed) return { ok: false, message: 'Bookmark not found.' };
+    const clips = await YTM_Storage.getBookmarksForVideo(parsed.videoId);
+    const dup = clips.some(
+      (c) => c.createdAt !== parsed.createdAt && c.startTime != null && Math.abs(c.startTime - currentTime) < this.DUP_START_EPSILON
     );
     if (dup) return { ok: false, message: 'A bookmark already starts here.' };
-    b.startTime = currentTime;
-    b.updatedAt = Date.now();
-    await YTM_Storage.saveBookmarks(all);
-    return { ok: true };
+    return this._withClip(id, (clip) => {
+      clip.startTime = currentTime;
+    });
   },
 
   async markEnd(id, currentTime) {
     if (currentTime == null) return { ok: false, message: 'Open the video to mark from playback.' };
-    const all = await YTM_Storage.getBookmarks();
-    const b = all[id];
-    if (!b) return { ok: false, message: 'Bookmark not found.' };
-    let start = b.startTime;
-    let end = currentTime;
-    if (start != null && end < start) {
-      [start, end] = [end, start];
-    }
-    b.startTime = start;
-    b.endTime = end;
-    b.updatedAt = Date.now();
-    await YTM_Storage.saveBookmarks(all);
-    return { ok: true };
+    return this._withClip(id, (clip) => {
+      let start = clip.startTime;
+      let end = currentTime;
+      if (start != null && end < start) {
+        [start, end] = [end, start];
+      }
+      clip.startTime = start;
+      clip.endTime = end;
+    });
   },
 
-  async saveEdits(id, rangeText, notes) {
+  async saveEdits(id, rangeText, labelText) {
     const range = this.parseRangeText(rangeText);
     if (!range) return { ok: false, message: 'Enter a time like 1:10 or 1:10-2:00.' };
-    const all = await YTM_Storage.getBookmarks();
-    const b = all[id];
-    if (!b) return { ok: false, message: 'Bookmark not found.' };
-    b.startTime = range.start;
-    b.endTime = range.end;
-    b.notes = notes;
-    b.updatedAt = Date.now();
-    await YTM_Storage.saveBookmarks(all);
-    return { ok: true };
+    return this._withClip(id, (clip) => {
+      clip.startTime = range.start;
+      clip.endTime = range.end;
+      clip.label = labelText;
+    });
   },
 
   async remove(id) {
-    const all = await YTM_Storage.getBookmarks();
-    delete all[id];
-    await YTM_Storage.saveBookmarks(all);
-  },
-
-  async addManual(videoMeta, rangeText, notes) {
-    const range = this.parseRangeText(rangeText);
-    if (!range) return { ok: false, message: 'Enter a time like 1:10 or 1:10-2:00.' };
-    const bookmark = this.makeBookmark(videoMeta, { start: range.start, end: range.end, notes });
-    const all = await YTM_Storage.getBookmarks();
-    all[bookmark.id] = bookmark;
-    await YTM_Storage.saveBookmarks(all);
-    return { ok: true, bookmark };
+    const parsed = this.parseId(id);
+    if (!parsed) return;
+    const clips = await YTM_Storage.getBookmarksForVideo(parsed.videoId);
+    const filtered = clips.filter((c) => c.createdAt !== parsed.createdAt);
+    await YTM_Storage.saveBookmarksForVideo(parsed.videoId, filtered);
   },
 
   async applyRawText(videoMeta, text) {
+    await this.rememberVideoMeta(videoMeta.videoId, videoMeta.title, videoMeta.channel);
     const lines = text
       .split('\n')
       .map((l) => l.trim())
       .filter(Boolean);
 
-    const all = await YTM_Storage.getBookmarks();
-    for (const [id, b] of Object.entries(all)) {
-      if (b.videoId === videoMeta.videoId) delete all[id];
-    }
-
+    const clips = [];
     for (const line of lines) {
       const parsed = this.parseRawLine(line);
       if (!parsed) continue;
-      const bookmark = this.makeBookmark(videoMeta, parsed);
-      all[bookmark.id] = bookmark;
+      clips.push(this.makeClip(parsed));
     }
-
-    await YTM_Storage.saveBookmarks(all);
+    await YTM_Storage.saveBookmarksForVideo(videoMeta.videoId, clips);
   }
 };

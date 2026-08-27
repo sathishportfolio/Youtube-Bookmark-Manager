@@ -16,17 +16,20 @@
     </div>
   </header>
 
-  <p class="hint">
-    Use the bookmark panel above the video title on any YouTube watch page to
-    mark start/end points, or right-click a video page for a quick start.
+  <p id="notOnVideo" class="hint" hidden>
+    Open a YouTube video to see its bookmarks here. Use the bookmark panel
+    above the video title, or the 📚 Library button above to manage every
+    video at once.
   </p>
 
-  <div id="controls">
-    <input id="searchInput" type="search" placeholder="Search title, channel, notes…">
+  <div id="videoHeader" class="video-header" hidden></div>
+
+  <div id="controls" hidden>
+    <input id="searchInput" type="search" placeholder="Search this video's labels…">
   </div>
 
-  <div id="videoList"></div>
-  <p id="emptyState" class="hint" hidden>No bookmarks yet.</p>
+  <ul id="videoList" class="clip-list"></ul>
+  <p id="emptyState" class="hint" hidden>No bookmarks on this video yet.</p>
   <p id="statusMsg" class="status" hidden></p>
 
   <script src="js/storage.js"></script>
