@@ -75,9 +75,27 @@ async function runAutosync() {
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local' || syncInProgress) return;
-  if (!changes.bookmarks && !changes.tags && !changes.videoTags && !changes.preferences) return;
+  if (!changes.bookmarks && !changes.tags && !changes.tagsLastModified && !changes.videoTags && !changes.preferences) return;
   clearTimeout(autosyncTimer);
   autosyncTimer = setTimeout(runAutosync, AUTOSYNC_DEBOUNCE_MS);
+});
+
+// Write-triggered autosync (above) only pushes/pulls when *this* device
+// makes a local edit — a device sitting idle would otherwise never learn
+// about a change (e.g. a tag delete) made on another device until it next
+// writes something itself or the user clicks "⟲ Sync". A periodic pull
+// closes that gap so idle devices pick up remote changes on their own.
+const PERIODIC_SYNC_ALARM = 'ytm-periodic-sync';
+const PERIODIC_SYNC_MINUTES = 5;
+
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.alarms.create(PERIODIC_SYNC_ALARM, { periodInMinutes: PERIODIC_SYNC_MINUTES });
+});
+chrome.runtime.onStartup.addListener(() => {
+  chrome.alarms.create(PERIODIC_SYNC_ALARM, { periodInMinutes: PERIODIC_SYNC_MINUTES });
+});
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === PERIODIC_SYNC_ALARM) runAutosync();
 });
 
 async function quickStart(videoId, tabId) {

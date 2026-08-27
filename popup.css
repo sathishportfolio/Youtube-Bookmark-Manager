@@ -37,6 +37,19 @@ button {
 }
 button:hover { border-color: var(--accent); }
 button:disabled { opacity: 0.5; cursor: default; }
+#syncBtn { position: relative; }
+.sync-dot {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid var(--bg);
+  background: var(--muted);
+}
+.sync-dot.ok { background: #2e7d32; }
+.sync-dot.error { background: #dc2626; }
 button.danger { color: #dc2626; border-color: #dc2626; }
 .hint { color: var(--muted); font-size: 11px; margin: 4px 0 10px; }
 #controls { margin-bottom: 8px; }

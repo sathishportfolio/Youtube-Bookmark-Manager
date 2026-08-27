@@ -52,14 +52,20 @@ const YTM_Bookmarks = {
   },
 
   // For the Library page: every video that has at least one clip, each
-  // with its clips already decorated.
+  // with its clips already decorated. `tags` resolves each video's stored
+  // tag ids to { id, name } pairs (deleted/unknown ids are dropped) so
+  // callers can display names without also depending on the tag list.
   async getAllVideoGroups() {
     const all = await YTM_Storage.getAllBookmarks();
+    const allTags = await YTM_Storage.getTags();
+    const tagsById = new Map(allTags.map((t) => [t.id, t]));
+
     const groups = [];
     for (const [videoId, clips] of Object.entries(all)) {
       if (!clips || clips.length === 0) continue;
       const meta = await YTM_Storage.getVideoMeta(videoId);
-      const tags = await YTM_Storage.getVideoTags(videoId);
+      const tagIds = await YTM_Storage.getVideoTags(videoId);
+      const tags = tagIds.map((id) => tagsById.get(id)).filter(Boolean).map((t) => ({ id: t.id, name: t.name }));
       groups.push({
         videoId,
         title: (meta && meta.title) || videoId,

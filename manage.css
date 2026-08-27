@@ -9,6 +9,7 @@ body.manage-page h1 {
 }
 body.manage-page #videoList {
   max-height: none;
+  overflow: visible;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -39,6 +40,11 @@ body.manage-page #controls #searchInput {
 body.manage-page #controls .ytm-btn {
   flex-shrink: 0;
 }
+#manageTagsBtn.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(204, 0, 0, 0.08);
+}
 
 /* Tag manager */
 #tagManager {
@@ -63,6 +69,31 @@ body.manage-page #controls .ytm-btn {
 }
 .tag-manager-add input.ytm-input-error {
   border-color: #dc2626;
+}
+.tag-manager-controls {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.tag-manager-controls input[type="search"] {
+  flex: 1;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+}
+.tag-manager-controls select {
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+}
+#tagManager .hint {
+  margin: 0 0 8px;
 }
 
 /* Tag chips, shared by manager list, filter bar, and per-video rows */
@@ -94,6 +125,19 @@ body.manage-page #controls .ytm-btn {
 }
 .tag-chip-remove:hover {
   color: #dc2626;
+}
+.tag-chip-name {
+  cursor: default;
+}
+.tag-rename-input {
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 0 3px;
+  font: inherit;
+  font-size: 11px;
+  background: var(--bg);
+  color: var(--fg);
+  width: 90px;
 }
 .tag-filter-chip {
   cursor: pointer;
@@ -129,7 +173,14 @@ body.manage-page #controls .ytm-btn {
 .tag-edit-btn {
   position: relative;
   font-size: 11px;
-  padding: 1px 5px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  color: var(--accent);
+  border-color: var(--accent);
+  background: rgba(204, 0, 0, 0.06);
+}
+.tag-edit-btn:hover {
+  background: rgba(204, 0, 0, 0.12);
 }
 .tag-popover {
   position: absolute;
@@ -140,10 +191,27 @@ body.manage-page #controls .ytm-btn {
   border-radius: 8px;
   padding: 8px;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
-  min-width: 140px;
+  min-width: 180px;
+  max-width: 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.tag-popover-search {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+}
+.tag-popover-list {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  max-height: 180px;
+  overflow-y: auto;
 }
 .tag-popover-item {
   display: flex;
@@ -151,4 +219,19 @@ body.manage-page #controls .ytm-btn {
   gap: 6px;
   font-size: 12px;
   cursor: pointer;
+}
+.tag-popover-create {
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 6px;
+  text-align: left;
+  cursor: pointer;
+}
+.tag-popover-create:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }

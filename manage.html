@@ -11,7 +11,7 @@
     <h1>YouTube Manager — Library</h1>
     <div class="header-actions">
       <button id="autoplayBtn" title="On: Play jumps between bookmarks and stops after the last one. Off: Play just plays the video normally from that point.">Autoplay: On</button>
-      <button id="syncBtn" title="Sync with Gist">⟲ Sync</button>
+      <button id="syncBtn" title="Sync with Gist">⟲ Sync<span id="syncDot" class="sync-dot"></span></button>
       <button id="optionsBtn" title="Settings">⚙</button>
     </div>
   </header>
@@ -20,7 +20,7 @@
 
   <div id="controls">
     <input id="searchInput" type="search" placeholder="Search title, channel, label…">
-    <button id="manageTagsBtn" class="ytm-btn">🏷 Manage tags</button>
+    <button id="manageTagsBtn" class="ytm-btn">Manage tags</button>
   </div>
 
   <div id="tagManager" hidden>
@@ -28,9 +28,32 @@
       <input id="newTagInput" type="text" placeholder="New tag name" spellcheck="false">
       <button id="addTagBtn" class="ytm-btn">Add</button>
     </div>
+    <div class="tag-manager-controls">
+      <input id="tagSearchInput" type="search" placeholder="Search tags…">
+      <select id="tagSortSelect">
+        <option value="az">A–Z</option>
+        <option value="za">Z–A</option>
+        <option value="modified">Recently Modified</option>
+        <option value="added">Recently Added</option>
+        <option value="tagged">Recently Tagged</option>
+        <option value="mostTagged">Most Tagged</option>
+      </select>
+    </div>
+    <p class="hint">Double-click a tag to rename it.</p>
     <div id="tagManagerList" class="tag-chip-list"></div>
   </div>
 
+  <div id="tagFilterControls" class="tag-manager-controls" hidden>
+    <input id="tagFilterSearchInput" type="search" placeholder="Search tags…">
+    <select id="tagFilterSortSelect">
+      <option value="az">A–Z</option>
+      <option value="za">Z–A</option>
+      <option value="modified">Recently Modified</option>
+      <option value="added">Recently Added</option>
+      <option value="tagged">Recently Tagged</option>
+      <option value="mostTagged">Most Tagged</option>
+    </select>
+  </div>
   <div id="tagFilterBar" class="tag-chip-list" hidden></div>
 
   <div id="videoList"></div>

@@ -21,3 +21,10 @@ input[type="text"] {
 a { color: var(--accent); }
 .button-link { font-size: 12px; text-decoration: none; }
 .button-link:hover { text-decoration: underline; }
+
+.danger-zone {
+  border: 1px solid #dc2626;
+  border-radius: 8px;
+  padding: 12px;
+}
+.danger-zone h2 { color: #dc2626; }

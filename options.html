@@ -44,6 +44,32 @@
     <p id="lastSynced" class="hint"></p>
   </section>
 
+  <section class="danger-zone">
+    <h2>Danger zone</h2>
+
+    <p class="hint">
+      Clears every bookmark and tag stored in this browser. Your token and
+      Gist ID above are kept as-is, and the configured Gist is overwritten
+      in place so it ends up holding only your preferences (Autoplay,
+      panel state) — nothing is deleted from GitHub. This cannot be
+      undone.
+    </p>
+    <div class="button-row">
+      <button id="deleteDataOnlyBtn" class="danger">Delete data only (keep token &amp; Gist)</button>
+    </div>
+
+    <p class="hint">
+      Permanently deletes the Gist configured above (if any) from GitHub,
+      and clears every bookmark, tag, and setting stored in this browser.
+      This cannot be undone.
+    </p>
+    <div class="button-row">
+      <button id="deleteAllBtn" class="danger">Delete all data &amp; Gist</button>
+    </div>
+
+    <p id="dangerStatus" class="status" hidden></p>
+  </section>
+
   <script src="js/storage.js"></script>
   <script src="js/gist.js"></script>
   <script src="js/options.js"></script>

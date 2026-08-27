@@ -232,6 +232,174 @@
   border-bottom-color: #f5b400;
 }
 
+/* Playlist panel */
+#ytm-playlist-panel {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--yt-spec-10-percent-layer, rgba(128, 128, 128, 0.2));
+  border-radius: 12px;
+  background: var(--yt-spec-badge-chip-background, rgba(128, 128, 128, 0.08));
+  font: 13px/1.4 Roboto, Arial, sans-serif;
+  color: var(--yt-spec-text-primary, inherit);
+}
+.ytm-playlist-label {
+  font-weight: 500;
+}
+#ytm-playlist-panel .ytm-panel-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.ytm-playlist-body {
+  margin-top: 8px;
+}
+.ytm-playlist-controls,
+.ytm-playlist-tag-controls {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.ytm-playlist-search,
+.ytm-playlist-tag-search {
+  flex: 1;
+  border: 1px solid var(--yt-spec-10-percent-layer, rgba(128, 128, 128, 0.3));
+  border-radius: 6px;
+  padding: 5px 8px;
+  background: var(--yt-spec-general-background-a, transparent);
+  color: var(--yt-spec-text-primary, inherit);
+  font: inherit;
+}
+.ytm-playlist-sort,
+.ytm-playlist-tag-sort {
+  border: 1px solid var(--yt-spec-10-percent-layer, rgba(128, 128, 128, 0.3));
+  border-radius: 6px;
+  padding: 5px 6px;
+  background: var(--yt-spec-general-background-a, transparent);
+  color: var(--yt-spec-text-primary, inherit);
+  font: inherit;
+}
+
+.tag-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--yt-spec-10-percent-layer, rgba(128, 128, 128, 0.3));
+  border-radius: 12px;
+  padding: 2px 8px;
+  font-size: 11px;
+  color: var(--yt-spec-text-primary, inherit);
+  background: var(--yt-spec-general-background-a, rgba(128, 128, 128, 0.08));
+}
+.tag-filter-chip {
+  cursor: pointer;
+}
+.tag-filter-chip.active {
+  border-color: var(--yt-spec-call-to-action, #3ea6ff);
+  color: var(--yt-spec-call-to-action, #3ea6ff);
+  background: rgba(62, 166, 255, 0.1);
+}
+.tag-filter-clear {
+  border: none;
+  background: transparent;
+  color: var(--yt-spec-text-secondary, #909090);
+  font-size: 11px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.ytm-playlist-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 480px;
+  overflow-y: auto;
+}
+.ytm-playlist-item {
+  border-top: 1px solid var(--yt-spec-10-percent-layer, rgba(128, 128, 128, 0.2));
+  padding-top: 8px;
+}
+.ytm-playlist-item.active {
+  border-radius: 8px;
+  background: rgba(62, 166, 255, 0.08);
+  padding: 8px;
+  margin: -8px -4px 0;
+}
+.ytm-playlist-item-header {
+  display: flex;
+  gap: 8px;
+}
+.ytm-playlist-thumb {
+  width: 80px;
+  height: 45px;
+  object-fit: cover;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+.ytm-playlist-meta {
+  min-width: 0;
+  flex: 1;
+}
+.ytm-playlist-title {
+  display: block;
+  color: var(--yt-spec-text-primary, inherit);
+  font-weight: 500;
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.ytm-playlist-title:hover {
+  color: var(--yt-spec-call-to-action, #3ea6ff);
+}
+.ytm-playlist-sub {
+  color: var(--yt-spec-text-secondary, #909090);
+  font-size: 11px;
+  margin-top: 2px;
+}
+.ytm-playlist-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+.ytm-playlist-clips {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ytm-playlist-clip-btn {
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  color: var(--yt-spec-call-to-action, #3ea6ff);
+  padding: 3px 4px;
+  font: 12px/1.3 inherit;
+  cursor: pointer;
+  border-radius: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ytm-playlist-clip-btn:hover {
+  background: var(--yt-spec-badge-chip-background, rgba(128, 128, 128, 0.1));
+}
+
 .ytm-tooltip {
   position: fixed;
   transform: translate(-50%, -100%) translateY(-10px);

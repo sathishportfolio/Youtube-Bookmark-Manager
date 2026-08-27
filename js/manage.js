@@ -3,7 +3,17 @@ let allTagsCache = [];
 const expandedVideoIds = new Set();
 const selectedTagFilters = new Set();
 let tagManagerOpen = false;
-let openTagPopover = null;
+let tagManagerSort = 'az';
+let tagManagerQuery = '';
+// Search/sort for the always-visible tag filter bar (used to find/filter
+// videos by tag), independent of the tag manager panel's own search/sort
+// (used to find a tag to rename/delete).
+let tagFilterSort = 'az';
+let tagFilterQuery = '';
+// Tracks which video's tag popover is open (and its in-popover search text)
+// across re-renders, so a checkbox toggle — which triggers a full
+// renderList() to refresh chips/filters — doesn't tear the popover down.
+let openTagPopoverState = null;
 
 function setStatus(msg, isError = false) {
   const el = document.getElementById('statusMsg');
@@ -13,7 +23,7 @@ function setStatus(msg, isError = false) {
 }
 
 function matchesFilter(group, query) {
-  if (selectedTagFilters.size > 0 && !group.tags.some((t) => selectedTagFilters.has(t))) return false;
+  if (selectedTagFilters.size > 0 && !group.tags.some((t) => selectedTagFilters.has(t.id))) return false;
   if (!query) return true;
   const q = query.toLowerCase();
   const haystack = [group.title, group.channel, ...group.clips.map((c) => c.label)].join(' ').toLowerCase();
@@ -167,10 +177,92 @@ function buildBulkControls(videoMeta, clips) {
 }
 
 function closeTagPopover() {
-  if (openTagPopover) {
-    openTagPopover.remove();
-    openTagPopover = null;
+  openTagPopoverState = null;
+  const existing = document.querySelector('.tag-popover');
+  if (existing) existing.remove();
+}
+
+// Builds (or rebuilds, on re-render, if it was left open) the searchable,
+// multi-select popover for adding/removing tags on one video. Toggling a
+// checkbox re-renders the whole list to refresh chips/filters elsewhere,
+// so this is re-invoked from buildVideoTagsRow on every render — it must
+// preserve the in-progress search text via openTagPopoverState.
+function renderTagPopover(group, editBtn) {
+  const existing = document.querySelector('.tag-popover');
+  if (existing) existing.remove();
+
+  const popover = document.createElement('div');
+  popover.className = 'tag-popover';
+  popover.addEventListener('click', (e) => e.stopPropagation());
+
+  const query = (openTagPopoverState.query || '').trim().toLowerCase();
+
+  const search = document.createElement('input');
+  search.type = 'search';
+  search.className = 'tag-popover-search';
+  search.placeholder = 'Search or create a tag…';
+  search.value = openTagPopoverState.query || '';
+  search.addEventListener('input', () => {
+    openTagPopoverState.query = search.value;
+    renderTagPopover(group, editBtn);
+    const s = document.querySelector('.tag-popover-search');
+    if (s) {
+      s.focus();
+      s.setSelectionRange(s.value.length, s.value.length);
+    }
+  });
+  popover.appendChild(search);
+
+  const list = document.createElement('div');
+  list.className = 'tag-popover-list';
+
+  const matches = allTagsCache.filter((t) => t.name.toLowerCase().includes(query));
+
+  if (matches.length === 0 && allTagsCache.length > 0) {
+    const hint = document.createElement('div');
+    hint.className = 'hint';
+    hint.textContent = 'No matching tags.';
+    list.appendChild(hint);
+  } else if (allTagsCache.length === 0) {
+    const hint = document.createElement('div');
+    hint.className = 'hint';
+    hint.textContent = 'No tags yet — create one below.';
+    list.appendChild(hint);
   }
+
+  for (const tag of matches) {
+    const label = document.createElement('label');
+    label.className = 'tag-popover-item';
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = group.tags.some((t) => t.id === tag.id);
+    checkbox.addEventListener('change', async () => {
+      await YTM_Tags.toggleVideoTag(group.videoId, tag.id);
+      await renderList();
+    });
+    label.append(checkbox, document.createTextNode(tag.name));
+    list.appendChild(label);
+  }
+
+  popover.appendChild(list);
+
+  const exactMatch = allTagsCache.some((t) => t.name.toLowerCase() === query);
+  if (query && !exactMatch) {
+    const createBtn = document.createElement('button');
+    createBtn.type = 'button';
+    createBtn.className = 'tag-popover-create';
+    createBtn.textContent = `+ Create "${search.value.trim()}"`;
+    createBtn.addEventListener('click', async () => {
+      const result = await YTM_Tags.createTag(search.value);
+      if (!result.ok) return;
+      await YTM_Tags.toggleVideoTag(group.videoId, result.id);
+      openTagPopoverState.query = '';
+      await renderList();
+    });
+    popover.appendChild(createBtn);
+  }
+
+  editBtn.insertAdjacentElement('afterend', popover);
 }
 
 function buildVideoTagsRow(group) {
@@ -181,55 +273,48 @@ function buildVideoTagsRow(group) {
   chips.className = 'video-tags';
   for (const t of group.tags) {
     const chip = document.createElement('span');
-    chip.className = 'tag-chip';
-    chip.textContent = t;
+    chip.className = 'tag-chip tag-chip-removable';
+    chip.textContent = t.name;
+
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'tag-chip-remove';
+    removeBtn.textContent = '✕';
+    removeBtn.title = `Remove "${t.name}" from this video`;
+    removeBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await YTM_Tags.removeVideoTag(group.videoId, t.id);
+      await renderList();
+    });
+    chip.appendChild(removeBtn);
     chips.appendChild(chip);
   }
 
   const editBtn = document.createElement('button');
   editBtn.type = 'button';
-  editBtn.className = 'ytm-icon-btn tag-edit-btn';
+  editBtn.className = 'ytm-btn tag-edit-btn';
   editBtn.title = 'Add or remove tags';
-  editBtn.textContent = '🏷';
+  editBtn.textContent = group.tags.length > 0 ? 'Tags' : '+ Tag';
   editBtn.addEventListener('click', (e) => {
     e.stopPropagation();
-    if (openTagPopover && openTagPopover.dataset.videoId === group.videoId) {
+    if (openTagPopoverState && openTagPopoverState.videoId === group.videoId) {
       closeTagPopover();
       return;
     }
-    closeTagPopover();
-
-    const popover = document.createElement('div');
-    popover.className = 'tag-popover';
-    popover.dataset.videoId = group.videoId;
-
-    if (allTagsCache.length === 0) {
-      const hint = document.createElement('div');
-      hint.className = 'hint';
-      hint.textContent = 'No tags yet — create one with "Manage tags" above.';
-      popover.appendChild(hint);
-    } else {
-      for (const tag of allTagsCache) {
-        const label = document.createElement('label');
-        label.className = 'tag-popover-item';
-        const checkbox = document.createElement('input');
-        checkbox.type = 'checkbox';
-        checkbox.checked = group.tags.includes(tag);
-        checkbox.addEventListener('change', async () => {
-          await YTM_Tags.toggleVideoTag(group.videoId, tag);
-          await renderList();
-        });
-        label.append(checkbox, document.createTextNode(tag));
-        popover.appendChild(label);
-      }
-    }
-
-    editBtn.insertAdjacentElement('afterend', popover);
-    openTagPopover = popover;
-    setTimeout(() => document.addEventListener('click', closeTagPopover, { once: true }), 0);
+    openTagPopoverState = { videoId: group.videoId, query: '' };
+    renderTagPopover(group, editBtn);
+    const s = document.querySelector('.tag-popover-search');
+    if (s) s.focus();
   });
 
   wrap.append(chips, editBtn);
+
+  if (openTagPopoverState && openTagPopoverState.videoId === group.videoId) {
+    // Re-render happened while this video's popover was open (e.g. a
+    // checkbox toggle) — rebuild it in place instead of leaving it closed.
+    renderTagPopover(group, editBtn);
+  }
+
   return wrap;
 }
 
@@ -326,46 +411,107 @@ async function renderVideoGroup(group) {
 
 // --- tag manager (create/delete tags) and filter bar -----------------
 
-function renderTagManager() {
+async function renderTagManager() {
   const list = document.getElementById('tagManagerList');
   list.innerHTML = '';
-  for (const tag of allTagsCache) {
+
+  const sorted = await YTM_Tags.getAllTags(tagManagerSort);
+  const query = tagManagerQuery.trim().toLowerCase();
+  const filtered = query ? sorted.filter((t) => t.name.toLowerCase().includes(query)) : sorted;
+
+  for (const tag of filtered) {
     const chip = document.createElement('span');
     chip.className = 'tag-chip tag-chip-removable';
-    chip.textContent = tag;
+    chip.title = `${tag.count} video${tag.count === 1 ? '' : 's'} — double-click to rename`;
+
+    const nameEl = document.createElement('span');
+    nameEl.className = 'tag-chip-name';
+    nameEl.textContent = tag.name;
+    nameEl.addEventListener('dblclick', () => startRenameTag(chip, nameEl, tag));
 
     const removeBtn = document.createElement('button');
     removeBtn.type = 'button';
     removeBtn.className = 'tag-chip-remove';
     removeBtn.textContent = '✕';
-    removeBtn.title = `Delete "${tag}"`;
+    removeBtn.title = `Delete "${tag.name}"`;
     removeBtn.addEventListener('click', async () => {
-      await YTM_Tags.deleteTag(tag);
-      selectedTagFilters.delete(tag);
+      await YTM_Tags.deleteTag(tag.id);
+      selectedTagFilters.delete(tag.id);
       await renderList();
     });
 
-    chip.appendChild(removeBtn);
+    chip.append(nameEl, removeBtn);
     list.appendChild(chip);
+  }
+
+  if (filtered.length === 0) {
+    const hint = document.createElement('div');
+    hint.className = 'hint';
+    hint.textContent = allTagsCache.length === 0 ? 'No tags yet.' : 'No matching tags.';
+    list.appendChild(hint);
   }
 }
 
-function renderTagFilterBar() {
+function startRenameTag(chip, nameEl, tag) {
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'tag-rename-input';
+  input.value = tag.name;
+  chip.replaceChild(input, nameEl);
+  input.focus();
+  input.select();
+
+  let done = false;
+  const commit = async () => {
+    if (done) return;
+    done = true;
+    const result = await YTM_Tags.renameTag(tag.id, input.value);
+    if (!result.ok) setStatus(result.message, true);
+    await renderList();
+  };
+  const cancel = () => {
+    if (done) return;
+    done = true;
+    renderTagManager();
+  };
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') commit();
+    else if (e.key === 'Escape') cancel();
+  });
+  input.addEventListener('blur', commit);
+}
+
+async function renderTagFilterBar() {
+  const controls = document.getElementById('tagFilterControls');
   const bar = document.getElementById('tagFilterBar');
+  controls.hidden = allTagsCache.length === 0;
   bar.innerHTML = '';
   bar.hidden = allTagsCache.length === 0;
+  if (allTagsCache.length === 0) return;
 
-  for (const tag of allTagsCache) {
+  const sorted = await YTM_Tags.getAllTags(tagFilterSort);
+  const query = tagFilterQuery.trim().toLowerCase();
+  const filtered = query ? sorted.filter((t) => t.name.toLowerCase().includes(query)) : sorted;
+
+  for (const tag of filtered) {
     const chip = document.createElement('button');
     chip.type = 'button';
-    chip.className = 'tag-chip tag-filter-chip' + (selectedTagFilters.has(tag) ? ' active' : '');
-    chip.textContent = tag;
+    chip.className = 'tag-chip tag-filter-chip' + (selectedTagFilters.has(tag.id) ? ' active' : '');
+    chip.textContent = tag.name;
     chip.addEventListener('click', async () => {
-      if (selectedTagFilters.has(tag)) selectedTagFilters.delete(tag);
-      else selectedTagFilters.add(tag);
+      if (selectedTagFilters.has(tag.id)) selectedTagFilters.delete(tag.id);
+      else selectedTagFilters.add(tag.id);
       await renderList();
     });
     bar.appendChild(chip);
+  }
+
+  if (filtered.length === 0) {
+    const hint = document.createElement('span');
+    hint.className = 'hint';
+    hint.textContent = 'No matching tags.';
+    bar.appendChild(hint);
   }
 
   if (selectedTagFilters.size > 0) {
@@ -396,13 +542,12 @@ async function submitNewTag() {
 function setTagManagerOpen(open) {
   tagManagerOpen = open;
   document.getElementById('tagManager').hidden = !open;
+  document.getElementById('manageTagsBtn').classList.toggle('active', open);
 }
 
 // --- top-level list render -------------------------------------------
 
 async function renderList() {
-  closeTagPopover();
-
   const container = document.getElementById('videoList');
   const query = document.getElementById('searchInput').value.trim();
   container.innerHTML = '';
@@ -410,8 +555,8 @@ async function renderList() {
   groupsCache = await YTM_Bookmarks.getAllVideoGroups();
   allTagsCache = await YTM_Tags.getAllTags();
 
-  renderTagManager();
-  renderTagFilterBar();
+  await renderTagManager();
+  await renderTagFilterBar();
 
   const filtered = groupsCache.filter((g) => matchesFilter(g, query));
   filtered.sort((a, b) => b.lastUpdated - a.lastUpdated);
@@ -434,9 +579,22 @@ async function toggleAutoplay() {
   await refreshAutoplayButton();
 }
 
+// Green: configured and the last sync attempt (manual, autosync, or the
+// periodic background pull) succeeded. Red: not configured yet, or the
+// last attempt failed — see settings.lastSyncError, set by YTM_Sync.run().
+async function refreshSyncStatus() {
+  const settings = await YTM_Storage.getSettings();
+  const dot = document.getElementById('syncDot');
+  const ok = !!(settings.token && settings.gistId) && !settings.lastSyncError;
+  dot.classList.toggle('ok', ok);
+  dot.classList.toggle('error', !ok);
+  dot.title = ok ? 'Synced' : settings.lastSyncError || 'Not set up — add a token in Settings.';
+}
+
 async function syncNow() {
   setStatus('Syncing…');
   const result = await YTM_Sync.run();
+  await refreshSyncStatus();
   if (!result.ok) {
     setStatus(result.message, true);
     return;
@@ -449,6 +607,7 @@ async function syncNow() {
 document.addEventListener('DOMContentLoaded', async () => {
   await renderList();
   refreshAutoplayButton();
+  refreshSyncStatus();
 
   document.getElementById('autoplayBtn').addEventListener('click', toggleAutoplay);
   document.getElementById('syncBtn').addEventListener('click', syncNow);
@@ -460,8 +619,37 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('newTagInput').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') submitNewTag();
   });
+  document.getElementById('tagSearchInput').addEventListener('input', (e) => {
+    tagManagerQuery = e.target.value;
+    renderTagManager();
+  });
+  document.getElementById('tagSortSelect').addEventListener('change', (e) => {
+    tagManagerSort = e.target.value;
+    renderTagManager();
+  });
+  document.getElementById('tagFilterSearchInput').addEventListener('input', (e) => {
+    tagFilterQuery = e.target.value;
+    renderTagFilterBar();
+  });
+  document.getElementById('tagFilterSortSelect').addEventListener('change', (e) => {
+    tagFilterSort = e.target.value;
+    renderTagFilterBar();
+  });
+
+  // Close the per-video tag popover on an outside click. Clicks inside the
+  // popover itself are stopped from bubbling (see renderTagPopover), and a
+  // click on the edit button that opened it is handled by that button's
+  // own listener, so this only ever fires for genuine "click elsewhere".
+  document.addEventListener('click', () => {
+    if (openTagPopoverState) closeTagPopover();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && openTagPopoverState) closeTagPopover();
+  });
 
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && (changes.bookmarks || changes.tags || changes.videoTags)) renderList();
+    if (area !== 'local') return;
+    if (changes.bookmarks || changes.tags || changes.videoTags) renderList();
+    if (changes.settings) refreshSyncStatus();
   });
 });

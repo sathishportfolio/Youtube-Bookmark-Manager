@@ -51,15 +51,51 @@ to work from.
   off, it just seeks and plays the video normally from that point, with no
   jumping or pausing at clip boundaries. Both branches live in
   `playFromBookmark` in `js/content.js`; `playFromPoint` wraps it to handle
-  the separate (never-chained) "play from end" case.
-- **Tags** (`js/tags.js`) are per video, not per clip: a global name list
-  (`YTM_Storage.getTags`) plus a `videoId -> tags[]` map
-  (`YTM_Storage.getAllVideoTags`/`getVideoTags`). Library-page-only UI:
-  create/delete tags ("🏷 Manage tags"), toggle a tag on a video from its
-  header's 🏷 popover, and filter the video list by one or more tags
-  (any-match). `saveVideoTagsForVideo` bumps the same
-  `lastModifiedByVideoId[videoId]` entry as a clip write, so a video's
-  clips and tags always merge together — see Sync data model below.
+  the separate (never-chained) "play from end" case. With Autoplay on, once
+  the last bookmark in the current video finishes — or the video ends
+  naturally, e.g. its last clip has no end time (`ended` listener in
+  `setup()`) — playback doesn't just stop: `advanceToNextPlaylistVideo`
+  jumps to the next video in the in-page Playlist panel's current
+  filtered/sorted order and starts it from its first bookmark (every
+  playlist entry has at least one, so this always resolves when there's a
+  next video at all). With Autoplay off, a video ending is left alone —
+  no auto-advance.
+- **In-page Playlist panel** (`js/content.js`, injected right below the
+  bookmarks panel — `#ytm-playlist-panel`, `injectPlaylistPanel`/
+  `renderPlaylist`): every bookmarked video, playlist-style, mirroring
+  the Library page's search/tag-filter/sort controls but scoped to this
+  panel's own module-level state (`playlistQuery`/`playlistVideoSort`/
+  `playlistTagFilters`, etc. — per-tab only, not synced). A video's title
+  jumps to its first bookmark; each of its clips is also listed
+  individually and directly clickable. Picking an entry for a *different*
+  video reuses the popup's cross-tab "play this bookmark on load" handoff
+  (`YTM_Storage.setPendingPlay` + `js/content.js`'s `initializePlayback`)
+  but navigates the current tab there via `location.href` instead of
+  opening a new tab. The panel has its own Autoplay toggle button (same
+  synced preference as the bookmarks panel's) but no collapse control of
+  its own — it shows/hides together with the bookmarks panel, driven by
+  the same synced `panelCollapsed` preference (see `refreshPreferencesUI`).
+  Autoplay's next-video jump (above) walks this panel's current
+  filtered/sorted list, so filtering the playlist by tag also scopes what
+  Autoplay treats as "next."
+- **Tags** (`js/tags.js`) are per video, not per clip: a global tag list
+  (`YTM_Storage.getTags`, each `{ id, name, createdAt, updatedAt, deleted }`)
+  plus a `videoId -> tagId[]` map (`YTM_Storage.getAllVideoTags`/
+  `getVideoTags`) — videos reference tags by `id`, never by name, so a
+  rename never has to touch every video's assignments. Library-page-only
+  UI: create/rename/delete tags and search/sort them ("🏷 Manage tags" —
+  sort by A–Z, Z–A, Recently Modified, Recently Added, Recently Tagged, or
+  Most Tagged, the last two derived on the fly from `videoTags` +
+  `lastModifiedByVideoId` rather than stored); the same search/sort pair
+  also sits directly above the always-visible tag filter bar (independent
+  state — one finds a tag to rename/delete, the other finds a tag to
+  filter videos by). Toggle a tag on a video from its header's 🏷 popover
+  (searchable, multi-select checkboxes, with inline "+ Create" for a new
+  tag), remove a tag directly from its chip on the video header, and
+  filter the video list by one or more tags (any-match).
+  `saveVideoTagsForVideo` bumps the same `lastModifiedByVideoId[videoId]`
+  entry as a clip write, so a video's clips and tags always merge
+  together — see Sync data model below.
 - **Sync is automatic**, not just manual: `js/sync.js` (`YTM_Sync.run()`)
   is the one routine — fetch, merge, save locally, push — used both by
   every manual "⟲ Sync" click and by `js/background.js`'s debounced
@@ -72,6 +108,14 @@ to work from.
   sync completes) that suppresses the listener while a sync's writes are
   in flight. Don't call `YTM_Sync.run()` from a `storage.onChanged`
   handler without that guard.
+  Write-triggered autosync alone only pulls remote changes when *this*
+  device also has a local edit to push — a device sitting idle would
+  otherwise never learn about a change (e.g. a tag delete) made on
+  another device. `js/background.js` also registers a `chrome.alarms`
+  periodic alarm (`ytm-periodic-sync`, every 5 minutes) that calls the
+  same `runAutosync()`, so idle devices still pick up remote changes on
+  their own instead of waiting for their own next edit or a manual
+  "⟲ Sync" click.
 
 ### Sync data model
 
@@ -83,8 +127,9 @@ Bookmarks sync as one JSON file per Gist, shaped exactly like this
   "bookmarks": { "<videoId>": [{ "label", "startTime", "endTime", "favorite", "createdAt", "updatedAt" }] },
   "lastModifiedByVideoId": { "<videoId>": 1735353600000 },
   "preferences": { "autoplay": true, "panelCollapsed": false, "updatedAt": 1735353600000 },
-  "tags": ["Tutorial", "Music"],
-  "videoTags": { "<videoId>": ["Music"] }
+  "tags": [{ "id": "a1b2", "name": "Tutorial", "createdAt": 1735353600000, "updatedAt": 1735353600000 }],
+  "tagsLastModified": { "a1b2": 1735353600000 },
+  "videoTags": { "<videoId>": ["a1b2"] }
 }
 ```
 
@@ -112,11 +157,66 @@ Bookmarks sync as one JSON file per Gist, shaped exactly like this
   it; keying off `lastModifiedByVideoId` is what makes a full-video
   deletion actually propagate as a deletion. If you touch this merge,
   preserve that.
-- The global `tags` list merges as a simple union (`YTM_Gist.mergeTagList`)
-  — never destructive, so a tag created on one device always survives a
-  sync even if the other device hasn't seen it yet.
+- **The global `tags` list merges the same way videos do**
+  (`YTM_Gist.mergeTagData`): a separate `tagsLastModified[tagId]` map,
+  bumped by `YTM_Storage.touchTag` on every create/rename, mirrors
+  `lastModifiedByVideoId`. The merge iterates
+  `Object.keys(local.tagsLastModified)`, not `Object.keys(local.tags)`,
+  the same way `mergeVideoData` iterates `lastModifiedByVideoId`:
+  whichever side touched a given id more recently wins that id's entire
+  state (present-with-this-name, or absent) — never a plain union. A
+  tag's `id` is assigned once at creation and never changes, so renaming
+  (`YTM_Tags.renameTag`) just updates the `name` field of that one record
+  in place — it can't come back as a duplicate the way a name-keyed merge
+  would.
+  **Deletion is hard:** `YTM_Tags.deleteTag` removes the id from both
+  `tags` and `tagsLastModified`, unlike `lastModifiedByVideoId`, which is
+  kept forever for exactly this reason — a deliberate, previously-revisited
+  tradeoff (in exchange for not accumulating tombstones forever). On its
+  own that would make a delete invisible to `mergeTagData` — nothing left
+  to out-rank a stale remote copy, not even on the deleting device's own
+  very next sync — so `deleteTag` also records the id via
+  `YTM_Storage.addPendingTagDeletion` (a short-lived, local-only,
+  *unsynced* list), and `YTM_Sync.run()` strips those ids back out of
+  `mergeTagData`'s result before saving/pushing, then clears the list once
+  that push actually succeeds. That covers the common case: this device
+  deletes a tag, then syncs (manually, via debounced autosync, or the
+  periodic pull) — the delete reaches the Gist instead of getting silently
+  undone by that very sync. What's still unprotected is a genuinely
+  *different* device that hasn't synced since before the delete — it still
+  has its own `tagsLastModified` entry and can resurrect its stale copy on
+  its own next sync, since nothing anywhere outranks it by then. Don't
+  "fix" that remaining gap by reintroducing a kept-forever tombstone
+  without checking first — that was explicitly tried and reverted once
+  already. Legacy Gist content (tags synced as plain strings, as
+  `{ name, createdAt, updatedAt }` with no `id`, or as tombstoned
+  `{ ..., deleted: true }` records from an earlier build) is normalized
+  on read (`YTM_Gist._normalizeTags` / `YTM_Storage.getTags`) — using the
+  name itself as the `id` for legacy entries so old `videoTags` entries
+  (which referenced tags by name) still resolve, and dropping any
+  leftover tombstones outright.
 - Gist content is the source of truth for sync; local storage
   (`chrome.storage.local`) is the working cache.
+- The Settings page's "Danger zone" (`js/options.js`) has two destructive
+  actions, both behind a native `confirm()`:
+  - **"Delete data only"** (`YTM_Storage.clearBookmarkData`) clears
+    bookmarks/lastModifiedByVideoId/tags/tagsLastModified/videoTags
+    locally but leaves `settings` (token, gistId) and `preferences`
+    untouched, then pushes that empty state straight to the *same* Gist
+    via `YTM_Gist.pushData` — a direct overwrite, not a merge — so the
+    Gist ends up holding only preferences. `lastModifiedByVideoId` and
+    `tagsLastModified` are cleared outright rather than bumped-and-kept
+    (the same tradeoff as `YTM_Tags.deleteTag`, applied consistently
+    here): a device that hasn't synced since before this wipe still has
+    its own stale entries and can push its old bookmarks/tags back on
+    its next sync, since nothing here outranks them anymore.
+  - **"Delete all data & Gist"** (`YTM_Storage.clearAllLocalData` +
+    `YTM_Gist.deleteGist`) permanently deletes the configured Gist from
+    GitHub and wipes every `chrome.storage.local` key this extension
+    uses, including `settings`. Gist deletion is attempted before the
+    local wipe and the local wipe is skipped if it fails, so a bad
+    token/network error can't leave the Gist orphaned with no local
+    record of it.
 
 ## Platform & stack decisions
 

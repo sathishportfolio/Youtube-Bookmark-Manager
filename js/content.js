@@ -1,5 +1,6 @@
 (function () {
   const PANEL_ID = 'ytm-panel';
+  const PLAYLIST_PANEL_ID = 'ytm-playlist-panel';
   const MARKER_LAYER_ID = 'ytm-marker-layer';
   const TOOLTIP_ID = 'ytm-tooltip';
 
@@ -11,6 +12,18 @@
   let rawEditorOpen = false;
   let playQueue = null;
   let playQueueHandler = null;
+  let videoEndedHandler = null;
+
+  // Playlist panel UI state — per-tab only, not synced (mirrors the search/
+  // sort/filter state manage.js keeps as module-level variables for the
+  // same controls on the Library page). Its show/hide state is not its own
+  // — it follows the main panel's synced `panelCollapsed` preference, so
+  // one toggle (the "🔖 Bookmarks" button) hides/shows both.
+  let playlistQuery = '';
+  let playlistVideoSort = 'recent';
+  const playlistTagFilters = new Set();
+  let playlistTagFilterQuery = '';
+  let playlistTagFilterSort = 'az';
 
   function getVideoEl() {
     return document.querySelector('video.html5-main-video');
@@ -87,6 +100,7 @@
         } else {
           video.pause();
           clearPlayQueue();
+          advanceToNextPlaylistVideo();
         }
       }
     };
@@ -105,6 +119,89 @@
       return;
     }
     await playFromBookmark(bookmark);
+  }
+
+  // --- playlist (all bookmarked videos, right side panel) ----------------
+  //
+  // Mirrors manage.html's search/tag-filter/sort controls, scoped to
+  // content.js's own module-level state. The filtered/sorted order shown
+  // here is also the order autoplay advances through — see
+  // advanceToNextPlaylistVideo.
+
+  function matchesPlaylistFilter(group, query) {
+    if (playlistTagFilters.size > 0 && !group.tags.some((t) => playlistTagFilters.has(t.id))) return false;
+    if (!query) return true;
+    const q = query.toLowerCase();
+    const haystack = [group.title, group.channel, ...group.clips.map((c) => c.label)].join(' ').toLowerCase();
+    return haystack.includes(q);
+  }
+
+  function sortPlaylistGroups(groups) {
+    const sorted = groups.slice();
+    switch (playlistVideoSort) {
+      case 'az':
+        sorted.sort((a, b) => a.title.localeCompare(b.title));
+        break;
+      case 'za':
+        sorted.sort((a, b) => b.title.localeCompare(a.title));
+        break;
+      case 'mostClips':
+        sorted.sort((a, b) => b.clips.length - a.clips.length);
+        break;
+      default:
+        sorted.sort((a, b) => b.lastUpdated - a.lastUpdated);
+    }
+    return sorted;
+  }
+
+  async function getPlaylistGroups() {
+    const groups = await YTM_Bookmarks.getAllVideoGroups();
+    return sortPlaylistGroups(groups.filter((g) => matchesPlaylistFilter(g, playlistQuery)));
+  }
+
+  // Sets up the cross-navigation handoff (reusing the same pendingPlay
+  // mechanism the popup uses to open a bookmark in a new tab) and navigates
+  // this tab there, or — if it's the video already playing — just plays in
+  // place without a page load.
+  async function playPlaylistBookmark(group, bookmark) {
+    if (group.videoId === currentVideoId) {
+      await playFromPoint(bookmark, 'start');
+      return;
+    }
+    await YTM_Storage.setPendingPlay({ videoId: group.videoId, bookmarkId: bookmark.id, point: 'start' });
+    location.href = group.url;
+  }
+
+  async function playFirstBookmarkOfVideo(group) {
+    const chronological = YTM_Bookmarks.sortByStart(group.clips);
+    if (chronological.length === 0) {
+      location.href = group.url;
+      return;
+    }
+    await playPlaylistBookmark(group, chronological[0]);
+  }
+
+  // Autoplay's "keep going" behavior beyond a single video: once the last
+  // bookmark in the current video finishes (or the video ends naturally —
+  // see the 'ended' listener in setup()), jump to the next video in the
+  // playlist's current filtered/sorted order and start it from its first
+  // bookmark. Every video in the playlist has at least one bookmark (only
+  // bookmarked videos are listed), so "start from bookmark if exist" always
+  // resolves as long as there's a next video at all.
+  async function advanceToNextPlaylistVideo() {
+    const prefs = await YTM_Storage.getPreferences();
+    if (prefs.autoplay === false) return;
+
+    const groups = await getPlaylistGroups();
+    const idx = groups.findIndex((g) => g.videoId === currentVideoId);
+    if (idx === -1 || idx + 1 >= groups.length) return;
+
+    const next = groups[idx + 1];
+    const chronological = YTM_Bookmarks.sortByStart(next.clips);
+    if (chronological.length === 0) return;
+
+    await YTM_Storage.setPendingPlay({ videoId: next.videoId, bookmarkId: chronological[0].id, point: 'start' });
+    location.href = next.url;
   }
 
   // On page load: a cross-tab "play this bookmark" request (from the popup)
@@ -315,6 +412,15 @@
     const collapsed = !!prefs.panelCollapsed;
     if (body) body.hidden = collapsed;
     if (toggleBtn) toggleBtn.textContent = collapsed ? '🔖 Bookmarks ▸' : '🔖 Bookmarks ▾';
+
+    const playlistPanel = document.getElementById(PLAYLIST_PANEL_ID);
+    if (playlistPanel) {
+      playlistPanel.hidden = collapsed;
+      const playlistAutoplayBtn = playlistPanel.querySelector('.ytm-btn-playlist-autoplay');
+      if (playlistAutoplayBtn) {
+        playlistAutoplayBtn.textContent = `Autoplay: ${prefs.autoplay === false ? 'Off' : 'On'}`;
+      }
+    }
   }
 
   function setRawEditorOpen(open) {
@@ -388,6 +494,203 @@
     list.innerHTML = '';
     for (const clip of clips) {
       list.appendChild(YTM_Row.render(clip, rowActions));
+    }
+  }
+
+  // --- playlist panel -----------------------------------------------------
+
+  function injectPlaylistPanel() {
+    const existing = document.getElementById(PLAYLIST_PANEL_ID);
+    if (existing) return existing;
+
+    const mainPanel = document.getElementById(PANEL_ID);
+    if (!mainPanel || !mainPanel.parentElement) return null;
+
+    const panel = document.createElement('div');
+    panel.id = PLAYLIST_PANEL_ID;
+    panel.innerHTML = `
+      <div class="ytm-panel-toggle-row">
+        <span class="ytm-playlist-label">▶ Playlist</span>
+        <button type="button" class="ytm-btn ytm-btn-playlist-autoplay" title="On: playback stays within bookmarks and auto-advances to the next video in this list when a video finishes. Off: normal playback, no auto-advance.">Autoplay: On</button>
+      </div>
+      <div class="ytm-playlist-body">
+        <div class="ytm-playlist-controls">
+          <input type="search" class="ytm-playlist-search" placeholder="Search title, channel, label…">
+          <select class="ytm-playlist-sort">
+            <option value="recent">Recently updated</option>
+            <option value="az">Title A–Z</option>
+            <option value="za">Title Z–A</option>
+            <option value="mostClips">Most bookmarks</option>
+          </select>
+        </div>
+        <div class="ytm-playlist-tag-controls">
+          <input type="search" class="ytm-playlist-tag-search" placeholder="Search tags…">
+          <select class="ytm-playlist-tag-sort">
+            <option value="az">A–Z</option>
+            <option value="za">Z–A</option>
+            <option value="modified">Recently Modified</option>
+            <option value="added">Recently Added</option>
+            <option value="tagged">Recently Tagged</option>
+            <option value="mostTagged">Most Tagged</option>
+          </select>
+        </div>
+        <div class="ytm-playlist-tag-bar tag-chip-list"></div>
+        <ul class="ytm-playlist-list"></ul>
+        <p class="ytm-playlist-empty ytm-hint" hidden>No bookmarked videos yet.</p>
+      </div>
+    `;
+
+    panel.querySelector('.ytm-btn-playlist-autoplay').addEventListener('click', toggleAutoplay);
+    panel.querySelector('.ytm-playlist-search').addEventListener('input', (e) => {
+      playlistQuery = e.target.value;
+      renderPlaylist();
+    });
+    panel.querySelector('.ytm-playlist-sort').addEventListener('change', (e) => {
+      playlistVideoSort = e.target.value;
+      renderPlaylist();
+    });
+    panel.querySelector('.ytm-playlist-tag-search').addEventListener('input', (e) => {
+      playlistTagFilterQuery = e.target.value;
+      renderPlaylistTagBar();
+    });
+    panel.querySelector('.ytm-playlist-tag-sort').addEventListener('change', (e) => {
+      playlistTagFilterSort = e.target.value;
+      renderPlaylistTagBar();
+    });
+
+    mainPanel.insertAdjacentElement('afterend', panel);
+    return panel;
+  }
+
+  async function renderPlaylistTagBar() {
+    const panel = document.getElementById(PLAYLIST_PANEL_ID);
+    if (!panel) return;
+
+    const controls = panel.querySelector('.ytm-playlist-tag-controls');
+    const bar = panel.querySelector('.ytm-playlist-tag-bar');
+    const allTags = await YTM_Tags.getAllTags();
+    controls.hidden = allTags.length === 0;
+    bar.hidden = allTags.length === 0;
+    bar.innerHTML = '';
+    if (allTags.length === 0) return;
+
+    const sorted = await YTM_Tags.getAllTags(playlistTagFilterSort);
+    const query = playlistTagFilterQuery.trim().toLowerCase();
+    const filtered = query ? sorted.filter((t) => t.name.toLowerCase().includes(query)) : sorted;
+
+    for (const tag of filtered) {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'tag-chip tag-filter-chip' + (playlistTagFilters.has(tag.id) ? ' active' : '');
+      chip.textContent = tag.name;
+      chip.addEventListener('click', () => {
+        if (playlistTagFilters.has(tag.id)) playlistTagFilters.delete(tag.id);
+        else playlistTagFilters.add(tag.id);
+        renderPlaylist();
+      });
+      bar.appendChild(chip);
+    }
+
+    if (filtered.length === 0) {
+      const hint = document.createElement('span');
+      hint.className = 'ytm-hint';
+      hint.textContent = 'No matching tags.';
+      bar.appendChild(hint);
+    }
+
+    if (playlistTagFilters.size > 0) {
+      const clearBtn = document.createElement('button');
+      clearBtn.type = 'button';
+      clearBtn.className = 'tag-chip tag-filter-clear';
+      clearBtn.textContent = 'Clear filter';
+      clearBtn.addEventListener('click', () => {
+        playlistTagFilters.clear();
+        renderPlaylist();
+      });
+      bar.appendChild(clearBtn);
+    }
+  }
+
+  function buildPlaylistItem(group) {
+    const li = document.createElement('li');
+    li.className = 'ytm-playlist-item' + (group.videoId === currentVideoId ? ' active' : '');
+
+    const header = document.createElement('div');
+    header.className = 'ytm-playlist-item-header';
+
+    const img = document.createElement('img');
+    img.src = group.thumbnail;
+    img.alt = '';
+    img.className = 'ytm-playlist-thumb';
+
+    const meta = document.createElement('div');
+    meta.className = 'ytm-playlist-meta';
+
+    const title = document.createElement('a');
+    title.href = group.url;
+    title.className = 'ytm-playlist-title';
+    title.textContent = group.title;
+    title.addEventListener('click', (e) => {
+      e.preventDefault();
+      playFirstBookmarkOfVideo(group);
+    });
+
+    const sub = document.createElement('div');
+    sub.className = 'ytm-playlist-sub';
+    sub.textContent = `${group.channel} · ${group.clips.length} bookmark${group.clips.length === 1 ? '' : 's'}`;
+
+    meta.append(title, sub);
+
+    if (group.tags.length > 0) {
+      const tagsRow = document.createElement('div');
+      tagsRow.className = 'ytm-playlist-tags';
+      for (const t of group.tags) {
+        const chip = document.createElement('span');
+        chip.className = 'tag-chip';
+        chip.textContent = t.name;
+        tagsRow.appendChild(chip);
+      }
+      meta.appendChild(tagsRow);
+    }
+
+    header.append(img, meta);
+    li.appendChild(header);
+
+    const clipList = document.createElement('ul');
+    clipList.className = 'ytm-playlist-clips';
+    for (const clip of YTM_Bookmarks.sortForDisplay(group.clips)) {
+      const clipLi = document.createElement('li');
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'ytm-playlist-clip-btn';
+      const range = YTM_Bookmarks.formatRangeText(clip);
+      btn.textContent = clip.label ? `${range} — ${clip.label}` : range;
+      btn.addEventListener('click', () => playPlaylistBookmark(group, clip));
+      clipLi.appendChild(btn);
+      clipList.appendChild(clipLi);
+    }
+    li.appendChild(clipList);
+
+    return li;
+  }
+
+  async function renderPlaylist() {
+    const panel = injectPlaylistPanel();
+    if (!panel) return;
+
+    await refreshPreferencesUI();
+    await renderPlaylistTagBar();
+
+    const list = panel.querySelector('.ytm-playlist-list');
+    const empty = panel.querySelector('.ytm-playlist-empty');
+    list.innerHTML = '';
+
+    const allGroups = await YTM_Bookmarks.getAllVideoGroups();
+    empty.hidden = allGroups.length > 0;
+
+    const groups = sortPlaylistGroups(allGroups.filter((g) => matchesPlaylistFilter(g, playlistQuery)));
+    for (const group of groups) {
+      list.appendChild(buildPlaylistItem(group));
     }
   }
 
@@ -495,6 +798,7 @@
         injectPanel();
         refreshPanel();
       }
+      if (!document.getElementById(PLAYLIST_PANEL_ID)) renderPlaylist();
       if (!document.getElementById(MARKER_LAYER_ID)) scheduleMarkerRender();
     });
   }
@@ -514,9 +818,15 @@
     YTM_Bookmarks.rememberVideoMeta(currentVideoId, meta.title, meta.channel);
 
     refreshPanel();
+    renderPlaylist();
     renderMarkers();
     initializePlayback();
     video.addEventListener('loadedmetadata', renderMarkers);
+    videoEndedHandler = () => {
+      clearPlayQueue();
+      advanceToNextPlaylistVideo();
+    };
+    video.addEventListener('ended', videoEndedHandler);
 
     if (!observer) {
       observer = new MutationObserver(schedulePresenceCheck);
@@ -526,10 +836,13 @@
 
   function teardown() {
     document.getElementById(PANEL_ID)?.remove();
+    document.getElementById(PLAYLIST_PANEL_ID)?.remove();
     document.getElementById(MARKER_LAYER_ID)?.remove();
     hideTooltip();
     if (video) {
       video.removeEventListener('loadedmetadata', renderMarkers);
+      if (videoEndedHandler) video.removeEventListener('ended', videoEndedHandler);
+      videoEndedHandler = null;
       clearPlayQueue();
     }
   }
@@ -541,6 +854,7 @@
       scheduleMarkerRender();
     }
     if (changes.preferences) refreshPreferencesUI();
+    if (changes.bookmarks || changes.tags || changes.videoTags) renderPlaylist();
   });
 
   chrome.runtime.onMessage.addListener((message) => {

@@ -110,6 +110,18 @@ async function refreshAutoplayButton() {
   document.getElementById('autoplayBtn').textContent = `Autoplay: ${prefs.autoplay === false ? 'Off' : 'On'}`;
 }
 
+// Green: configured and the last sync attempt (manual, autosync, or the
+// periodic background pull) succeeded. Red: not configured yet, or the
+// last attempt failed — see settings.lastSyncError, set by YTM_Sync.run().
+async function refreshSyncStatus() {
+  const settings = await YTM_Storage.getSettings();
+  const dot = document.getElementById('syncDot');
+  const ok = !!(settings.token && settings.gistId) && !settings.lastSyncError;
+  dot.classList.toggle('ok', ok);
+  dot.classList.toggle('error', !ok);
+  dot.title = ok ? 'Synced' : settings.lastSyncError || 'Not set up — add a token in Settings.';
+}
+
 async function toggleAutoplay() {
   const prefs = await YTM_Storage.getPreferences();
   await YTM_Storage.savePreferences({ autoplay: prefs.autoplay === false, updatedAt: Date.now() });
@@ -119,6 +131,7 @@ async function toggleAutoplay() {
 async function syncNow() {
   setStatus('Syncing…');
   const result = await YTM_Sync.run();
+  await refreshSyncStatus();
   if (!result.ok) {
     setStatus(result.message, true);
     return;
@@ -131,6 +144,7 @@ async function syncNow() {
 document.addEventListener('DOMContentLoaded', async () => {
   await loadCurrentVideo();
   refreshAutoplayButton();
+  refreshSyncStatus();
 
   document.getElementById('autoplayBtn').addEventListener('click', toggleAutoplay);
   document.getElementById('syncBtn').addEventListener('click', syncNow);
@@ -141,6 +155,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && changes.bookmarks) loadCurrentVideo();
+    if (area !== 'local') return;
+    if (changes.bookmarks) loadCurrentVideo();
+    if (changes.settings) refreshSyncStatus();
   });
 });

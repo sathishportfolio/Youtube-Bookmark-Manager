@@ -76,17 +76,78 @@ const YTM_Storage = {
 
   // --- tags ----------------------------------------------------------
   //
-  // A global tag list (names only) plus which tags apply to which video.
-  // Both sync through the Gist. videoTags changes bump the same
+  // A global tag list — [{ id, name, createdAt, updatedAt }] — plus which
+  // tags apply to which video (videoTags stores tag ids, not names, so a
+  // rename never has to touch every video's assignments). Both sync
+  // through the Gist. videoTags changes bump the same
   // lastModifiedByVideoId entry as bookmark changes, so a video's clips
   // and its tags always merge together as one unit.
 
   async getTags() {
-    return this._get('tags', []);
+    const tags = await this._get('tags', []);
+    // Tags used to be stored as a plain string array, then as
+    // { name, createdAt, updatedAt } with no stable id, then briefly as
+    // tombstoned records ({ id, name, createdAt, updatedAt, deleted }) for
+    // delete sync. Deletion is now hard (see touchTag/tagsLastModified) —
+    // a deleted tag simply isn't in this array — so normalize any
+    // leftover old-format entries on read and drop any leftover
+    // tombstones outright. Using the name itself as the id for legacy
+    // entries preserves continuity with existing videoTags entries, which
+    // were name-keyed under the older formats.
+    return tags
+      .filter((t) => !(typeof t !== 'string' && t.deleted))
+      .map((t) => {
+        if (typeof t === 'string') return { id: t, name: t, createdAt: 0, updatedAt: 0 };
+        if (!('id' in t)) return { ...t, id: t.name };
+        return t;
+      });
   },
 
   async saveTags(tags) {
     await this._set({ tags });
+  },
+
+  // Per-tag-id "last modified" map, mirroring lastModifiedByVideoId —
+  // bumped on every create/rename by YTM_Tags via touchTag. Unlike
+  // lastModifiedByVideoId, YTM_Tags.deleteTag removes its entry here too
+  // (by explicit choice), which reopens a real cross-device sync gap —
+  // see the comment on deleteTag and on YTM_Gist.mergeTagData.
+  async getTagsLastModified() {
+    return this._get('tagsLastModified', {});
+  },
+
+  async saveTagsLastModified(map) {
+    await this._set({ tagsLastModified: map });
+  },
+
+  async touchTag(tagId) {
+    const map = await this.getTagsLastModified();
+    map[tagId] = Date.now();
+    await this.saveTagsLastModified(map);
+  },
+
+  // Local-only, short-lived list of tag ids deleted since the last
+  // successful sync. Because YTM_Tags.deleteTag clears tagsLastModified
+  // for the id too, the delete itself is invisible to YTM_Gist.mergeTagData
+  // — without this list, the very next sync would fetch a remote copy
+  // that still has the tag and merge it right back in, undoing the
+  // delete before it ever reaches the Gist. YTM_Sync.run() strips these
+  // ids out of the merge result explicitly, then clears this list once
+  // that sync has actually pushed successfully — see js/sync.js.
+  async getPendingTagDeletions() {
+    return this._get('pendingTagDeletions', []);
+  },
+
+  async savePendingTagDeletions(ids) {
+    await this._set({ pendingTagDeletions: ids });
+  },
+
+  async addPendingTagDeletion(tagId) {
+    const ids = await this.getPendingTagDeletions();
+    if (!ids.includes(tagId)) {
+      ids.push(tagId);
+      await this.savePendingTagDeletions(ids);
+    }
   },
 
   async getAllVideoTags() {
@@ -130,7 +191,7 @@ const YTM_Storage = {
   // --- settings (local only: token, gist id) ------------------------------
 
   async getSettings() {
-    return this._get('settings', { token: '', gistId: '', lastSyncedAt: null });
+    return this._get('settings', { token: '', gistId: '', lastSyncedAt: null, lastSyncError: null });
   },
 
   async saveSettings(settings) {
@@ -140,7 +201,14 @@ const YTM_Storage = {
   // --- preferences (synced through the Gist, e.g. autoplay, panel state) -
 
   async getPreferences() {
-    return this._get('preferences', { autoplay: true, panelCollapsed: false, updatedAt: 0 });
+    return this._get('preferences', {
+      autoplay: true,
+      panelCollapsed: false,
+      playlistQuery: '',
+      playlistSort: 'recent',
+      playlistTagFilters: [],
+      updatedAt: 0
+    });
   },
 
   async savePreferences(preferences) {
@@ -159,5 +227,55 @@ const YTM_Storage = {
 
   async clearPendingPlay() {
     await this._remove('pendingPlay');
+  },
+
+  // --- full wipe (Settings page "delete all data") -----------------------
+  //
+  // Everything this extension keeps in chrome.storage.local: synced data
+  // (bookmarks, tags, videoTags, lastModifiedByVideoId, preferences),
+  // local-only caches (videoMeta, pendingPlay), and settings (token,
+  // gistId, lastSyncedAt). Does not touch the Gist itself — the caller is
+  // expected to delete that separately via YTM_Gist.deleteGist first.
+  async clearAllLocalData() {
+    await this._remove([
+      'bookmarks',
+      'lastModifiedByVideoId',
+      'tags',
+      'tagsLastModified',
+      'pendingTagDeletions',
+      'videoTags',
+      'preferences',
+      'videoMeta',
+      'pendingPlay',
+      'settings'
+    ]);
+  },
+
+  // --- data-only wipe (Settings page "delete data only, keep token/Gist") -
+  //
+  // Clears bookmarks/tags/videoTags and local-only caches, but leaves
+  // `settings` (token, gistId, lastSyncedAt) and `preferences` (Autoplay,
+  // panel state) untouched — the caller pushes the resulting near-empty
+  // state to the *same* configured Gist afterwards, so it ends up holding
+  // only preferences.
+  //
+  // lastModifiedByVideoId is cleared outright (by explicit choice), same
+  // as tags/tagsLastModified below — not bumped-and-kept the way a normal
+  // single-video deletion leaves it. That reopens the same gap
+  // mergeVideoData's lastModifiedByVideoId trick normally closes: a
+  // device that hasn't synced since before this wipe still has its own
+  // lastModifiedByVideoId entries and can push its stale bookmarks back
+  // on its next sync, since nothing here outranks them anymore.
+  //
+  // Tags get the same treatment — YTM_Tags.deleteTag hard-clears
+  // tagsLastModified too (a deliberate, previously-discussed tradeoff) —
+  // so a bulk tag wipe here matches that and carries the same known gap.
+  async clearBookmarkData() {
+    await this.saveAllBookmarks({});
+    await this.saveLastModifiedByVideoId({});
+    await this.saveAllVideoTags({});
+    await this.saveTags([]);
+    await this.saveTagsLastModified({});
+    await this._remove(['videoMeta', 'pendingPlay', 'pendingTagDeletions']);
   }
 };
