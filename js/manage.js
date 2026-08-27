@@ -1,5 +1,9 @@
 let groupsCache = [];
+let allTagsCache = [];
 const expandedVideoIds = new Set();
+const selectedTagFilters = new Set();
+let tagManagerOpen = false;
+let openTagPopover = null;
 
 function setStatus(msg, isError = false) {
   const el = document.getElementById('statusMsg');
@@ -9,6 +13,7 @@ function setStatus(msg, isError = false) {
 }
 
 function matchesFilter(group, query) {
+  if (selectedTagFilters.size > 0 && !group.tags.some((t) => selectedTagFilters.has(t))) return false;
   if (!query) return true;
   const q = query.toLowerCase();
   const haystack = [group.title, group.channel, ...group.clips.map((c) => c.label)].join(' ').toLowerCase();
@@ -161,6 +166,73 @@ function buildBulkControls(videoMeta, clips) {
   return { bar, editorWrap };
 }
 
+function closeTagPopover() {
+  if (openTagPopover) {
+    openTagPopover.remove();
+    openTagPopover = null;
+  }
+}
+
+function buildVideoTagsRow(group) {
+  const wrap = document.createElement('div');
+  wrap.className = 'video-tags-row';
+
+  const chips = document.createElement('div');
+  chips.className = 'video-tags';
+  for (const t of group.tags) {
+    const chip = document.createElement('span');
+    chip.className = 'tag-chip';
+    chip.textContent = t;
+    chips.appendChild(chip);
+  }
+
+  const editBtn = document.createElement('button');
+  editBtn.type = 'button';
+  editBtn.className = 'ytm-icon-btn tag-edit-btn';
+  editBtn.title = 'Add or remove tags';
+  editBtn.textContent = '🏷';
+  editBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (openTagPopover && openTagPopover.dataset.videoId === group.videoId) {
+      closeTagPopover();
+      return;
+    }
+    closeTagPopover();
+
+    const popover = document.createElement('div');
+    popover.className = 'tag-popover';
+    popover.dataset.videoId = group.videoId;
+
+    if (allTagsCache.length === 0) {
+      const hint = document.createElement('div');
+      hint.className = 'hint';
+      hint.textContent = 'No tags yet — create one with "Manage tags" above.';
+      popover.appendChild(hint);
+    } else {
+      for (const tag of allTagsCache) {
+        const label = document.createElement('label');
+        label.className = 'tag-popover-item';
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = group.tags.includes(tag);
+        checkbox.addEventListener('change', async () => {
+          await YTM_Tags.toggleVideoTag(group.videoId, tag);
+          await renderList();
+        });
+        label.append(checkbox, document.createTextNode(tag));
+        popover.appendChild(label);
+      }
+    }
+
+    editBtn.insertAdjacentElement('afterend', popover);
+    openTagPopover = popover;
+    setTimeout(() => document.addEventListener('click', closeTagPopover, { once: true }), 0);
+  });
+
+  wrap.append(chips, editBtn);
+  return wrap;
+}
+
 async function renderVideoGroup(group) {
   const videoMeta = { videoId: group.videoId, title: group.title, channel: group.channel };
   const expanded = expandedVideoIds.has(group.videoId);
@@ -194,7 +266,7 @@ async function renderVideoGroup(group) {
   const count = document.createElement('div');
   count.className = 'video-clip-count';
   count.textContent = `${group.clips.length} bookmark${group.clips.length === 1 ? '' : 's'}`;
-  meta.append(title, channel, count);
+  meta.append(title, channel, count, buildVideoTagsRow(group));
 
   header.append(img, meta);
   section.appendChild(header);
@@ -252,12 +324,95 @@ async function renderVideoGroup(group) {
   return section;
 }
 
+// --- tag manager (create/delete tags) and filter bar -----------------
+
+function renderTagManager() {
+  const list = document.getElementById('tagManagerList');
+  list.innerHTML = '';
+  for (const tag of allTagsCache) {
+    const chip = document.createElement('span');
+    chip.className = 'tag-chip tag-chip-removable';
+    chip.textContent = tag;
+
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'tag-chip-remove';
+    removeBtn.textContent = '✕';
+    removeBtn.title = `Delete "${tag}"`;
+    removeBtn.addEventListener('click', async () => {
+      await YTM_Tags.deleteTag(tag);
+      selectedTagFilters.delete(tag);
+      await renderList();
+    });
+
+    chip.appendChild(removeBtn);
+    list.appendChild(chip);
+  }
+}
+
+function renderTagFilterBar() {
+  const bar = document.getElementById('tagFilterBar');
+  bar.innerHTML = '';
+  bar.hidden = allTagsCache.length === 0;
+
+  for (const tag of allTagsCache) {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'tag-chip tag-filter-chip' + (selectedTagFilters.has(tag) ? ' active' : '');
+    chip.textContent = tag;
+    chip.addEventListener('click', async () => {
+      if (selectedTagFilters.has(tag)) selectedTagFilters.delete(tag);
+      else selectedTagFilters.add(tag);
+      await renderList();
+    });
+    bar.appendChild(chip);
+  }
+
+  if (selectedTagFilters.size > 0) {
+    const clearBtn = document.createElement('button');
+    clearBtn.type = 'button';
+    clearBtn.className = 'tag-chip tag-filter-clear';
+    clearBtn.textContent = 'Clear filter';
+    clearBtn.addEventListener('click', async () => {
+      selectedTagFilters.clear();
+      await renderList();
+    });
+    bar.appendChild(clearBtn);
+  }
+}
+
+async function submitNewTag() {
+  const input = document.getElementById('newTagInput');
+  const result = await YTM_Tags.createTag(input.value);
+  if (result.ok) {
+    input.value = '';
+    await renderList();
+  } else {
+    input.classList.add('ytm-input-error');
+    setTimeout(() => input.classList.remove('ytm-input-error'), 1500);
+  }
+}
+
+function setTagManagerOpen(open) {
+  tagManagerOpen = open;
+  document.getElementById('tagManager').hidden = !open;
+}
+
+// --- top-level list render -------------------------------------------
+
 async function renderList() {
+  closeTagPopover();
+
   const container = document.getElementById('videoList');
   const query = document.getElementById('searchInput').value.trim();
   container.innerHTML = '';
 
   groupsCache = await YTM_Bookmarks.getAllVideoGroups();
+  allTagsCache = await YTM_Tags.getAllTags();
+
+  renderTagManager();
+  renderTagFilterBar();
+
   const filtered = groupsCache.filter((g) => matchesFilter(g, query));
   filtered.sort((a, b) => b.lastUpdated - a.lastUpdated);
 
@@ -275,53 +430,20 @@ async function refreshAutoplayButton() {
 
 async function toggleAutoplay() {
   const prefs = await YTM_Storage.getPreferences();
-  await YTM_Storage.savePreferences({ autoplay: prefs.autoplay === false, updatedAt: Date.now() });
+  await YTM_Storage.savePreferences({ ...prefs, autoplay: prefs.autoplay === false, updatedAt: Date.now() });
   await refreshAutoplayButton();
 }
 
 async function syncNow() {
-  const settings = await YTM_Storage.getSettings();
-  if (!settings.token) {
-    setStatus('Add a GitHub token in Settings first.', true);
+  setStatus('Syncing…');
+  const result = await YTM_Sync.run();
+  if (!result.ok) {
+    setStatus(result.message, true);
     return;
   }
-
-  setStatus('Syncing…');
-  try {
-    const localBookmarks = await YTM_Storage.getAllBookmarks();
-    const localLMB = await YTM_Storage.getLastModifiedByVideoId();
-    const localPrefs = await YTM_Storage.getPreferences();
-    let gistId = settings.gistId;
-
-    if (!gistId) {
-      gistId = await YTM_Gist.createGist(settings.token, {
-        bookmarks: localBookmarks,
-        lastModifiedByVideoId: localLMB,
-        preferences: localPrefs
-      });
-    } else {
-      const remote = await YTM_Gist.fetchData(settings.token, gistId);
-      const merged = YTM_Gist.mergeBookmarks(localBookmarks, localLMB, remote.bookmarks, remote.lastModifiedByVideoId);
-      const mergedPrefs = YTM_Gist.mergePreferences(localPrefs, remote.preferences);
-
-      await YTM_Storage.saveAllBookmarks(merged.bookmarks);
-      await YTM_Storage.saveLastModifiedByVideoId(merged.lastModifiedByVideoId);
-      await YTM_Storage.savePreferences(mergedPrefs);
-
-      await YTM_Gist.pushData(settings.token, gistId, {
-        bookmarks: merged.bookmarks,
-        lastModifiedByVideoId: merged.lastModifiedByVideoId,
-        preferences: mergedPrefs
-      });
-    }
-
-    await YTM_Storage.saveSettings({ ...settings, gistId, lastSyncedAt: Date.now() });
-    await refreshAutoplayButton();
-    await renderList();
-    setStatus('Synced.');
-  } catch (err) {
-    setStatus(err.message, true);
-  }
+  await refreshAutoplayButton();
+  await renderList();
+  setStatus('Synced.');
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -333,7 +455,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('optionsBtn').addEventListener('click', () => chrome.runtime.openOptionsPage());
   document.getElementById('searchInput').addEventListener('input', renderList);
 
+  document.getElementById('manageTagsBtn').addEventListener('click', () => setTagManagerOpen(!tagManagerOpen));
+  document.getElementById('addTagBtn').addEventListener('click', submitNewTag);
+  document.getElementById('newTagInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') submitNewTag();
+  });
+
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && changes.bookmarks) renderList();
+    if (area === 'local' && (changes.bookmarks || changes.tags || changes.videoTags)) renderList();
   });
 });

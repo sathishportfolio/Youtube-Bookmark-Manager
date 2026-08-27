@@ -10,10 +10,14 @@ third-party account required beyond GitHub.
 
 ## Features
 
-- **Bookmark start/end points** — a panel above the video title has
-  **Bookmark start** / **Bookmark end** buttons, plus the full clip list for
-  that video right there. Seek-bar markers highlight every clip's range —
-  hover for a tooltip (time range + notes), click to play that range.
+- **Bookmark start/end points** — a panel in the right-hand sidebar (above
+  the playlist/recommendations) has **Bookmark start** / **Bookmark end**
+  buttons, plus the full clip list for that video right there. Collapse the
+  whole panel down to a single toggle bar when you don't need it — that
+  collapsed/expanded state is a Gist-synced preference, so it stays
+  consistent across your devices. Seek-bar markers highlight every clip's
+  range — hover for a tooltip (time range + notes), click to play that
+  range.
 - **Multiple clips per video** — bookmark as many moments in the same video
   as you like; each one is tracked separately.
 - **Clickable start/end** — every clip's timestamps are links: click the
@@ -64,17 +68,25 @@ third-party account required beyond GitHub.
   position without opening the popup or panel. Once a clip has a start but
   no end, *"bookmark end here"* appears in the same menu.
 - **Library page** — a full browser tab listing every bookmarked video by
-  its header (thumbnail, title, channel, bookmark count) only; click a
+  its header (thumbnail, title, channel, bookmark count, tags) only; click a
   thumbnail to expand that video, revealing the *full* row controls
   (favorite, mark start/end, edit, save, manual add, raw-text editor, copy
   all) — collapse it the same way. Open it from the popup's **📚 Library**
   button or the link on the Settings page.
-- **Gist sync** — push and pull your bookmarks (and the Autoplay
-  preference) to a private GitHub Gist so they follow you across machines
-  and browsers. Merging happens per video (see Data model below), so
+- **Tags** (Library page) — create/delete tags with **🏷 Manage tags**, tag
+  or untag any video from the **🏷** button in its header, and filter the
+  video list by one or more tags at once (click to toggle each one; results
+  match *any* selected tag). Tags are per video, not per clip.
+- **Gist sync, automatic** — every local change (a clip added/edited/
+  deleted, a video's tags changed, Autoplay or the panel's collapsed state
+  flipped) triggers a debounced sync a couple of seconds later, so you
+  don't need to remember to click **⟲ Sync** — it's still there for an
+  immediate manual sync. Merging happens per video (see Data model below):
   editing different videos on different devices is always safe; editing
   the *same* video on two devices before syncing is last-write-wins for
-  that video's whole clip list.
+  that video's clips and tags together. Deleting every clip on a video
+  removes that video from the Gist too, instead of leaving a stale entry
+  behind.
 - **No backend, no tracking** — the extension talks directly to
   `api.github.com`; there is no intermediary server and nothing is sent
   anywhere else.
@@ -85,11 +97,11 @@ third-party account required beyond GitHub.
 |---|---|
 | Platform | Chrome / Edge / Brave (Chromium, Manifest V3) |
 | Language | Vanilla JavaScript, HTML, CSS — no build step, no dependencies |
-| Storage | `chrome.storage.local` (bookmarks by video id, per-video last-modified map, local settings/token, Gist-synced preferences, local-only video title/channel cache, pending cross-tab play) |
-| Sync backend | [GitHub Gist API](https://docs.github.com/en/rest/gists) — one JSON file per gist |
+| Storage | `chrome.storage.local` (bookmarks by video id, per-video last-modified map, tags + per-video tag assignments, local settings/token, Gist-synced preferences, local-only video title/channel cache, pending cross-tab play) |
+| Sync backend | [GitHub Gist API](https://docs.github.com/en/rest/gists) — one JSON file per gist, synced automatically (debounced) on every local change |
 | Permissions | `storage`, `activeTab`, `scripting`, `contextMenus`, `tabs` |
 | Host permissions | `https://api.github.com/*`, `*://*.youtube.com/*` |
-| Content script | Injected on `youtube.com/watch*` pages — adds the bookmark panel above the title, seek-bar markers, and handles resume-playback messages |
+| Content script | Injected on `youtube.com/watch*` pages — adds the bookmark panel in the right-hand sidebar, seek-bar markers, and handles resume-playback messages |
 
 ### Project structure
 
@@ -100,16 +112,18 @@ manage.html/.css        Library page — every video, accordion-style
 options.html/.css      Settings page (Gist token + Gist ID)
 content.css             Styles for the in-page panel and seek-bar markers
 js/
-  storage.js            chrome.storage.local wrapper (bookmarks by video id, last-modified map, settings, preferences, video meta cache, pending-play)
+  storage.js            chrome.storage.local wrapper (bookmarks by video id, last-modified map, tags, settings, preferences, video meta cache, pending-play)
   gist.js               GitHub Gist API client + per-video merge logic
-  youtube.js             Video ID extraction, thumbnail/time helpers, page metadata scraping
-  bookmarks.js            Shared bookmark logic: id scheme, time/raw-text parsing, favorite/mark/save/delete mutations
-  row.js                  Shared bookmark-row UI component (full + minimal variants)
-  content.js               Injected into YouTube watch pages: bookmark panel, seek-bar markers, resume/play messaging
-  background.js            Service worker: right-click "quick start"/"quick end" bookmark actions
-  popup.js                  Popup UI logic — current video only
-  manage.js                 Library page logic — all videos, collapsible per video
-  options.js                 Settings page logic
+  sync.js                One shared sync routine (fetch, merge, save, push) used by autosync and every manual Sync button
+  youtube.js              Video ID extraction, thumbnail/time helpers, page metadata scraping
+  bookmarks.js             Shared bookmark logic: id scheme, time/raw-text parsing, favorite/mark/save/delete mutations
+  tags.js                   Global tag CRUD + per-video tag assignment
+  row.js                     Shared bookmark-row UI component (full + minimal variants)
+  content.js                  Injected into YouTube watch pages: bookmark panel, seek-bar markers, resume/play messaging
+  background.js                Service worker: right-click quick-add actions, debounced autosync on storage changes
+  popup.js                      Popup UI logic — current video only
+  manage.js                      Library page logic — all videos, tags, collapsible per video
+  options.js                      Settings page logic
 ```
 
 ### Data model
@@ -136,15 +150,24 @@ with no redundant per-clip video metadata:
   },
   "preferences": {
     "autoplay": true,
+    "panelCollapsed": false,
     "updatedAt": 1735353600000
+  },
+  "tags": ["Tutorial", "Music"],
+  "videoTags": {
+    "dQw4w9WgXcQ": ["Music"]
   }
 }
 ```
 
 This exact shape is what's stored as a single JSON file
 (`youtube-manager-bookmarks.json`) inside a private Gist, and what
-`chrome.storage.local` holds too. `endTime` is `null` until you set it — a
-video can have several clips at once, some still pending an end point.
+`chrome.storage.local` holds too (`preferences` is always present with
+defaults, so the pushed file is never empty — see `YTM_Storage.getPreferences`).
+`endTime` is `null` until you set it — a video can have several clips at
+once, some still pending an end point. `tags` is the global list of tag
+names (created/deleted from the Library page); `videoTags` maps a video id
+to the tags assigned to it — tags are per video, not per clip.
 
 A clip has no `id` field — the UI identifies one by `videoId::createdAt`
 (see `YTM_Bookmarks.makeId`/`parseId` in `js/bookmarks.js`) rather than
@@ -157,11 +180,23 @@ another device before you've ever opened it there shows its raw id as a
 title until you do.
 
 **Sync merges per video, not per clip**: `lastModifiedByVideoId[videoId]`
-is bumped on every write to that video's clip array. On sync, whichever
-side (local or remote) has the newer timestamp for a given video wins that
-video's *entire* clip array — see `YTM_Gist.mergeBookmarks` in
-`js/gist.js`. The GitHub token and Gist ID themselves are **not** synced —
-they stay local to each browser (see Security & privacy below).
+is bumped on every write to that video's clip array *or* its tags. On
+sync, whichever side (local or remote) has the newer timestamp for a given
+video wins that video's clips and tags together, as one unit — see
+`YTM_Gist.mergeVideoData` in `js/gist.js`. This is also what makes
+deleting a video's last clip actually remove that video from the Gist:
+the deletion still bumps `lastModifiedByVideoId`, so the merge sees it as
+the newer side and removes the (now absent) entry from the merged result,
+instead of silently keeping the remote's stale copy around. The GitHub
+token and Gist ID themselves are **not** synced — they stay local to each
+browser (see Security & privacy below).
+
+**Sync runs automatically**, not just on a manual click: every change to
+bookmarks, tags, or preferences schedules a debounced sync (`js/sync.js`'s
+`YTM_Sync.run()`) from the background service worker a couple of seconds
+later, batching bursts of edits into one sync. The popup and Library pages'
+**⟲ Sync** button calls the same routine immediately, for when you want to
+force a sync right away (e.g. to pull in a change made on another device).
 
 ### Raw text format
 
@@ -189,8 +224,10 @@ This extension isn't on the Chrome Web Store yet — install it unpacked:
 ## Usage
 
 1. Navigate to and open any video you want to save.
-2. Wait for the video to play, then use the bookmark panel above the video
-   title.
+2. Wait for the video to play, then use the bookmark panel in the sidebar
+   next to the video (above the playlist/recommendations). Click the
+   **🔖 Bookmarks ▾** bar at its top to collapse or expand the whole panel —
+   that state is remembered and synced to your other devices.
 3. Click **Bookmark start** to add the video to your list at the current
    time.
 4. Keep watching, then click **Bookmark end** (or the row's own **⏭ Mark
@@ -212,6 +249,13 @@ This extension isn't on the Chrome Web Store yet — install it unpacked:
 8. Toggle **Autoplay** (synced across your devices) to control whether
    clicking a clip's start chains into later bookmarks (on) or just plays
    normally from that point with no jumping or pausing (off).
+9. On the Library page: click **🏷 Manage tags** to create or delete tags;
+   click a video's **🏷** button to check/uncheck which tags apply to it;
+   click any tag chip in the filter bar above the video list to filter by
+   it (click more than one to match any of them; **Clear filter** resets).
+10. Everything syncs on its own a couple of seconds after you make a
+    change — the **⟲ Sync** button is there if you want to force one
+    immediately.
 
 Right-clicking a YouTube page or video link offers a shortcut for the first
 two steps without opening the panel: *"bookmark start here"* always shows

@@ -192,6 +192,12 @@
 
   // --- panel ------------------------------------------------------------
 
+  // Prefer the right-hand sidebar (above the playlist/recommendations);
+  // fall back to above the title for layouts without one (e.g. mobile web).
+  function findSidebarAnchor() {
+    return document.querySelector('#secondary #secondary-inner') || document.querySelector('#secondary');
+  }
+
   function findTitleAnchor() {
     return (
       document.querySelector('ytd-watch-metadata #title') ||
@@ -204,37 +210,44 @@
     const existing = document.getElementById(PANEL_ID);
     if (existing) return existing;
 
-    const anchor = findTitleAnchor();
-    if (!anchor || !anchor.parentElement) return null;
+    const sidebar = findSidebarAnchor();
+    const titleAnchor = sidebar ? null : findTitleAnchor();
+    if (!sidebar && (!titleAnchor || !titleAnchor.parentElement)) return null;
 
     const panel = document.createElement('div');
     panel.id = PANEL_ID;
     panel.innerHTML = `
-      <div class="ytm-panel-header">
-        <div class="ytm-panel-actions">
-          <button type="button" class="ytm-btn ytm-btn-start">🔖 Bookmark start</button>
-          <button type="button" class="ytm-btn ytm-btn-end" disabled>🏁 Bookmark end</button>
-          <span class="ytm-hint"></span>
+      <div class="ytm-panel-toggle-row">
+        <button type="button" class="ytm-btn ytm-btn-toggle-panel">🔖 Bookmarks ▾</button>
+      </div>
+      <div class="ytm-panel-body">
+        <div class="ytm-panel-header">
+          <div class="ytm-panel-actions">
+            <button type="button" class="ytm-btn ytm-btn-start">🔖 Bookmark start</button>
+            <button type="button" class="ytm-btn ytm-btn-end" disabled>🏁 Bookmark end</button>
+            <span class="ytm-hint"></span>
+          </div>
+          <div class="ytm-panel-toolbar">
+            <button type="button" class="ytm-btn ytm-btn-autoplay" title="On: Play jumps between bookmarks and stops after the last one. Off: Play just plays the video normally from that point.">Autoplay: On</button>
+            <button type="button" class="ytm-btn ytm-btn-raw" title="Bulk add/edit as text">Raw text</button>
+            <button type="button" class="ytm-btn ytm-btn-copy" title="Copy this video's bookmarks as text">Copy all</button>
+          </div>
         </div>
-        <div class="ytm-panel-toolbar">
-          <button type="button" class="ytm-btn ytm-btn-autoplay" title="On: Play jumps between bookmarks and stops after the last one. Off: Play just plays the video normally from that point.">Autoplay: On</button>
-          <button type="button" class="ytm-btn ytm-btn-raw" title="Bulk add/edit as text">Raw text</button>
-          <button type="button" class="ytm-btn ytm-btn-copy" title="Copy this video's bookmarks as text">Copy all</button>
+        <div class="ytm-add-row">
+          <input type="text" class="ytm-add-input" placeholder="1:10 or 1:10-2:00" spellcheck="false">
+          <input type="text" class="ytm-add-label-input" placeholder="Label" spellcheck="false">
+          <button type="button" class="ytm-btn ytm-add-btn">Add</button>
         </div>
+        <textarea class="ytm-raw-editor" spellcheck="false" hidden></textarea>
+        <div class="ytm-raw-actions" hidden>
+          <button type="button" class="ytm-btn ytm-raw-apply">Apply</button>
+          <button type="button" class="ytm-btn ytm-raw-cancel">Cancel</button>
+        </div>
+        <ul class="ytm-clip-list"></ul>
       </div>
-      <div class="ytm-add-row">
-        <input type="text" class="ytm-add-input" placeholder="1:10 or 1:10-2:00" spellcheck="false">
-        <input type="text" class="ytm-add-label-input" placeholder="Label" spellcheck="false">
-        <button type="button" class="ytm-btn ytm-add-btn">Add</button>
-      </div>
-      <textarea class="ytm-raw-editor" spellcheck="false" hidden></textarea>
-      <div class="ytm-raw-actions" hidden>
-        <button type="button" class="ytm-btn ytm-raw-apply">Apply</button>
-        <button type="button" class="ytm-btn ytm-raw-cancel">Cancel</button>
-      </div>
-      <ul class="ytm-clip-list"></ul>
     `;
 
+    panel.querySelector('.ytm-btn-toggle-panel').addEventListener('click', togglePanelCollapsed);
     panel.querySelector('.ytm-btn-start').addEventListener('click', handleStart);
     panel.querySelector('.ytm-btn-end').addEventListener('click', handleEnd);
     panel.querySelector('.ytm-btn-autoplay').addEventListener('click', toggleAutoplay);
@@ -269,23 +282,39 @@
     panel.querySelector('.ytm-raw-apply').addEventListener('click', applyRawEditor);
     panel.querySelector('.ytm-raw-cancel').addEventListener('click', () => setRawEditorOpen(false));
 
-    anchor.parentElement.insertBefore(panel, anchor);
+    if (sidebar) {
+      sidebar.insertBefore(panel, sidebar.firstChild);
+    } else {
+      titleAnchor.parentElement.insertBefore(panel, titleAnchor);
+    }
     return panel;
   }
 
   async function toggleAutoplay() {
     const prefs = await YTM_Storage.getPreferences();
-    const updated = { autoplay: prefs.autoplay === false, updatedAt: Date.now() };
-    await YTM_Storage.savePreferences(updated);
-    await refreshAutoplayButton();
+    await YTM_Storage.savePreferences({ ...prefs, autoplay: prefs.autoplay === false, updatedAt: Date.now() });
+    await refreshPreferencesUI();
   }
 
-  async function refreshAutoplayButton() {
+  async function togglePanelCollapsed() {
+    const prefs = await YTM_Storage.getPreferences();
+    await YTM_Storage.savePreferences({ ...prefs, panelCollapsed: !prefs.panelCollapsed, updatedAt: Date.now() });
+    await refreshPreferencesUI();
+  }
+
+  async function refreshPreferencesUI() {
     const panel = document.getElementById(PANEL_ID);
     if (!panel) return;
     const prefs = await YTM_Storage.getPreferences();
-    const btn = panel.querySelector('.ytm-btn-autoplay');
-    if (btn) btn.textContent = `Autoplay: ${prefs.autoplay === false ? 'Off' : 'On'}`;
+
+    const autoplayBtn = panel.querySelector('.ytm-btn-autoplay');
+    if (autoplayBtn) autoplayBtn.textContent = `Autoplay: ${prefs.autoplay === false ? 'Off' : 'On'}`;
+
+    const body = panel.querySelector('.ytm-panel-body');
+    const toggleBtn = panel.querySelector('.ytm-btn-toggle-panel');
+    const collapsed = !!prefs.panelCollapsed;
+    if (body) body.hidden = collapsed;
+    if (toggleBtn) toggleBtn.textContent = collapsed ? '🔖 Bookmarks ▸' : '🔖 Bookmarks ▾';
   }
 
   function setRawEditorOpen(open) {
@@ -353,7 +382,7 @@
       ? `Clip started at ${YTM_Youtube.formatTime(pending.startTime)} — click "Bookmark end" to finish it.`
       : '';
 
-    await refreshAutoplayButton();
+    await refreshPreferencesUI();
 
     const list = panel.querySelector('.ytm-clip-list');
     list.innerHTML = '';
@@ -511,7 +540,7 @@
       refreshPanel();
       scheduleMarkerRender();
     }
-    if (changes.preferences) refreshAutoplayButton();
+    if (changes.preferences) refreshPreferencesUI();
   });
 
   chrome.runtime.onMessage.addListener((message) => {

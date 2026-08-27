@@ -74,6 +74,45 @@ const YTM_Storage = {
     await this.saveLastModifiedByVideoId(map);
   },
 
+  // --- tags ----------------------------------------------------------
+  //
+  // A global tag list (names only) plus which tags apply to which video.
+  // Both sync through the Gist. videoTags changes bump the same
+  // lastModifiedByVideoId entry as bookmark changes, so a video's clips
+  // and its tags always merge together as one unit.
+
+  async getTags() {
+    return this._get('tags', []);
+  },
+
+  async saveTags(tags) {
+    await this._set({ tags });
+  },
+
+  async getAllVideoTags() {
+    return this._get('videoTags', {});
+  },
+
+  async saveAllVideoTags(videoTags) {
+    await this._set({ videoTags });
+  },
+
+  async getVideoTags(videoId) {
+    const all = await this.getAllVideoTags();
+    return all[videoId] || [];
+  },
+
+  async saveVideoTagsForVideo(videoId, tags) {
+    const all = await this.getAllVideoTags();
+    if (tags && tags.length > 0) {
+      all[videoId] = tags;
+    } else {
+      delete all[videoId];
+    }
+    await this._set({ videoTags: all });
+    await this.touchVideo(videoId);
+  },
+
   // Local-only title/channel cache, keyed by video id — never synced, since
   // the Gist payload only stores clip data. Populated whenever the content
   // script visits a video or a quick-add reads its page metadata.
@@ -98,10 +137,10 @@ const YTM_Storage = {
     await this._set({ settings });
   },
 
-  // --- preferences (synced through the Gist, e.g. autoplay) --------------
+  // --- preferences (synced through the Gist, e.g. autoplay, panel state) -
 
   async getPreferences() {
-    return this._get('preferences', { autoplay: true, updatedAt: 0 });
+    return this._get('preferences', { autoplay: true, panelCollapsed: false, updatedAt: 0 });
   },
 
   async savePreferences(preferences) {

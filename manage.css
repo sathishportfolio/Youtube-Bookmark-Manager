@@ -28,3 +28,127 @@ body.manage-page .video-details {
   padding-top: 10px;
   border-top: 1px solid var(--border);
 }
+
+body.manage-page #controls {
+  display: flex;
+  gap: 8px;
+}
+body.manage-page #controls #searchInput {
+  flex: 1;
+}
+body.manage-page #controls .ytm-btn {
+  flex-shrink: 0;
+}
+
+/* Tag manager */
+#tagManager {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  margin-bottom: 10px;
+}
+.tag-manager-add {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.tag-manager-add input {
+  flex: 1;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+}
+.tag-manager-add input.ytm-input-error {
+  border-color: #dc2626;
+}
+
+/* Tag chips, shared by manager list, filter bar, and per-video rows */
+.tag-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 2px 8px;
+  font-size: 11px;
+  color: var(--fg);
+  background: rgba(128, 128, 128, 0.08);
+}
+.tag-chip-remove {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 10px;
+  padding: 0;
+  line-height: 1;
+}
+.tag-chip-remove:hover {
+  color: #dc2626;
+}
+.tag-filter-chip {
+  cursor: pointer;
+}
+.tag-filter-chip.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(204, 0, 0, 0.08);
+}
+.tag-filter-clear {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+/* Per-video tag row + popover editor */
+.video-tags-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+.video-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.tag-edit-btn {
+  position: relative;
+  font-size: 11px;
+  padding: 1px 5px;
+}
+.tag-popover {
+  position: absolute;
+  z-index: 20;
+  margin-top: 4px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+  min-width: 140px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.tag-popover-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}

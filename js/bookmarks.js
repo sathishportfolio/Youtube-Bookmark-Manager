@@ -59,6 +59,7 @@ const YTM_Bookmarks = {
     for (const [videoId, clips] of Object.entries(all)) {
       if (!clips || clips.length === 0) continue;
       const meta = await YTM_Storage.getVideoMeta(videoId);
+      const tags = await YTM_Storage.getVideoTags(videoId);
       groups.push({
         videoId,
         title: (meta && meta.title) || videoId,
@@ -66,6 +67,7 @@ const YTM_Bookmarks = {
         thumbnail: this.thumbnailUrl(videoId),
         url: this.videoUrl(videoId),
         clips: clips.map((c) => this.decorate(videoId, c, meta)),
+        tags,
         lastUpdated: Math.max(0, ...clips.map((c) => c.updatedAt || 0))
       });
     }

@@ -117,48 +117,15 @@ async function toggleAutoplay() {
 }
 
 async function syncNow() {
-  const settings = await YTM_Storage.getSettings();
-  if (!settings.token) {
-    setStatus('Add a GitHub token in Settings first.', true);
+  setStatus('Syncing…');
+  const result = await YTM_Sync.run();
+  if (!result.ok) {
+    setStatus(result.message, true);
     return;
   }
-
-  setStatus('Syncing…');
-  try {
-    const localBookmarks = await YTM_Storage.getAllBookmarks();
-    const localLMB = await YTM_Storage.getLastModifiedByVideoId();
-    const localPrefs = await YTM_Storage.getPreferences();
-    let gistId = settings.gistId;
-
-    if (!gistId) {
-      gistId = await YTM_Gist.createGist(settings.token, {
-        bookmarks: localBookmarks,
-        lastModifiedByVideoId: localLMB,
-        preferences: localPrefs
-      });
-    } else {
-      const remote = await YTM_Gist.fetchData(settings.token, gistId);
-      const merged = YTM_Gist.mergeBookmarks(localBookmarks, localLMB, remote.bookmarks, remote.lastModifiedByVideoId);
-      const mergedPrefs = YTM_Gist.mergePreferences(localPrefs, remote.preferences);
-
-      await YTM_Storage.saveAllBookmarks(merged.bookmarks);
-      await YTM_Storage.saveLastModifiedByVideoId(merged.lastModifiedByVideoId);
-      await YTM_Storage.savePreferences(mergedPrefs);
-
-      await YTM_Gist.pushData(settings.token, gistId, {
-        bookmarks: merged.bookmarks,
-        lastModifiedByVideoId: merged.lastModifiedByVideoId,
-        preferences: mergedPrefs
-      });
-    }
-
-    await YTM_Storage.saveSettings({ ...settings, gistId, lastSyncedAt: Date.now() });
-    await refreshAutoplayButton();
-    await loadCurrentVideo();
-    setStatus('Synced.');
-  } catch (err) {
-    setStatus(err.message, true);
-  }
+  await refreshAutoplayButton();
+  await loadCurrentVideo();
+  setStatus('Synced.');
 }
 
 document.addEventListener('DOMContentLoaded', async () => {

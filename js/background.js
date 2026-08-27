@@ -1,4 +1,4 @@
-importScripts('storage.js', 'youtube.js', 'bookmarks.js');
+importScripts('storage.js', 'youtube.js', 'bookmarks.js', 'gist.js', 'sync.js');
 
 const START_MENU_ID = 'ytm-quick-start';
 const END_MENU_ID = 'ytm-quick-end';
@@ -40,6 +40,44 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
   if (area !== 'local' || !changes.bookmarks) return;
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   if (tab) updateEndMenuVisibility(tab.id);
+});
+
+// --- autosync ---------------------------------------------------------
+//
+// Runs in the background service worker rather than the popup, since the
+// popup's script is killed the moment it closes and would never finish an
+// in-flight sync. Debounced so a burst of edits (e.g. typing in the raw
+// text editor) becomes one sync, not one per keystroke.
+//
+// YTM_Sync.run() itself writes the merged result back to
+// chrome.storage.local, which would otherwise re-trigger this same
+// listener and loop forever syncing its own output. syncInProgress
+// suppresses onChanged while a sync (and its writes) are in flight, with
+// a short trailing window afterwards to absorb any delayed echo of those
+// writes before re-arming for genuinely new changes.
+
+const AUTOSYNC_DEBOUNCE_MS = 2000;
+const AUTOSYNC_SETTLE_MS = 500;
+let autosyncTimer = null;
+let syncInProgress = false;
+
+async function runAutosync() {
+  if (syncInProgress) return;
+  syncInProgress = true;
+  try {
+    await YTM_Sync.run();
+  } finally {
+    setTimeout(() => {
+      syncInProgress = false;
+    }, AUTOSYNC_SETTLE_MS);
+  }
+}
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local' || syncInProgress) return;
+  if (!changes.bookmarks && !changes.tags && !changes.videoTags && !changes.preferences) return;
+  clearTimeout(autosyncTimer);
+  autosyncTimer = setTimeout(runAutosync, AUTOSYNC_DEBOUNCE_MS);
 });
 
 async function quickStart(videoId, tabId) {

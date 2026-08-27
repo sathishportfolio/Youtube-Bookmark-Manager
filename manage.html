@@ -20,7 +20,18 @@
 
   <div id="controls">
     <input id="searchInput" type="search" placeholder="Search title, channel, label…">
+    <button id="manageTagsBtn" class="ytm-btn">🏷 Manage tags</button>
   </div>
+
+  <div id="tagManager" hidden>
+    <div class="tag-manager-add">
+      <input id="newTagInput" type="text" placeholder="New tag name" spellcheck="false">
+      <button id="addTagBtn" class="ytm-btn">Add</button>
+    </div>
+    <div id="tagManagerList" class="tag-chip-list"></div>
+  </div>
+
+  <div id="tagFilterBar" class="tag-chip-list" hidden></div>
 
   <div id="videoList"></div>
   <p id="emptyState" class="hint" hidden>No bookmarks yet.</p>
@@ -28,8 +39,10 @@
 
   <script src="js/storage.js"></script>
   <script src="js/gist.js"></script>
+  <script src="js/sync.js"></script>
   <script src="js/youtube.js"></script>
   <script src="js/bookmarks.js"></script>
+  <script src="js/tags.js"></script>
   <script src="js/row.js"></script>
   <script src="js/manage.js"></script>
 </body>

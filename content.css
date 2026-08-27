@@ -8,6 +8,13 @@
   color: var(--yt-spec-text-primary, inherit);
 }
 
+.ytm-panel-toggle-row {
+  display: flex;
+}
+.ytm-panel-body {
+  margin-top: 8px;
+}
+
 .ytm-panel-header {
   display: flex;
   align-items: center;
