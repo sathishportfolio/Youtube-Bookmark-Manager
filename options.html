@@ -48,6 +48,17 @@
     <h2>Danger zone</h2>
 
     <p class="hint">
+      Discards every bookmark, tag, and preference stored in this browser
+      and reloads everything fresh from the Gist configured above. Anything
+      local that hasn't made it to the Gist yet (e.g. from a device that
+      hasn't synced) is lost — nothing on GitHub is touched. Use this if
+      local data here looks wrong and you just want to trust the Gist.
+    </p>
+    <div class="button-row">
+      <button id="resetFromGistBtn" class="danger">Reset local data &amp; re-sync from Gist</button>
+    </div>
+
+    <p class="hint">
       Clears every bookmark and tag stored in this browser. Your token and
       Gist ID above are kept as-is, and the configured Gist is overwritten
       in place so it ends up holding only your preferences (Autoplay,

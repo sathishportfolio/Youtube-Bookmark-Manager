@@ -56,6 +56,48 @@ async function test() {
   }
 }
 
+// Discards every locally stored bookmark/tag/preference and replaces it
+// with exactly what's in the configured Gist — a hard pull, not a merge.
+// Unlike the merge YTM_Sync.run() does, this can lose local-only edits
+// that never made it to the Gist (e.g. from a device that hasn't synced
+// since), so it fetches first and only touches local storage once that
+// succeeds — a network failure here must never wipe local data.
+async function resetFromGist() {
+  const settings = await YTM_Storage.getSettings();
+  if (!settings.token || !settings.gistId) {
+    setDangerStatus('Add a token and Gist ID above (or sync once to create a Gist) before using this.', true);
+    return;
+  }
+
+  const confirmed = confirm(
+    "Discard every bookmark, tag, and preference stored in this browser, and reload everything fresh from the configured Gist? Anything local that hasn't made it to the Gist yet will be lost. This cannot be undone."
+  );
+  if (!confirmed) return;
+
+  setDangerStatus('Fetching from Gist…');
+  let remote;
+  try {
+    remote = await YTM_Gist.fetchData(settings.token, settings.gistId);
+  } catch (err) {
+    setDangerStatus(`Could not fetch from the Gist (${err.message}). Nothing was changed.`, true);
+    return;
+  }
+
+  await YTM_Storage.clearBookmarkData();
+  await YTM_Storage.saveAllBookmarks(remote.bookmarks);
+  await YTM_Storage.saveLastModifiedByVideoId(remote.lastModifiedByVideoId);
+  await YTM_Storage.saveTags(remote.tags);
+  await YTM_Storage.saveTagsLastModified(remote.tagsLastModified);
+  await YTM_Storage.saveAllVideoTags(remote.videoTags);
+  if (remote.preferences && Object.keys(remote.preferences).length > 0) {
+    await YTM_Storage.savePreferences(remote.preferences);
+  }
+  await YTM_Storage.saveSettings({ ...settings, lastSyncedAt: Date.now(), lastSyncError: null });
+
+  await load();
+  setDangerStatus('Local data replaced with the contents of the Gist.');
+}
+
 async function deleteAllData() {
   const settings = await YTM_Storage.getSettings();
 
@@ -133,6 +175,7 @@ document.addEventListener('DOMContentLoaded', () => {
   load();
   document.getElementById('saveBtn').addEventListener('click', save);
   document.getElementById('testBtn').addEventListener('click', test);
+  document.getElementById('resetFromGistBtn').addEventListener('click', resetFromGist);
   document.getElementById('deleteDataOnlyBtn').addEventListener('click', deleteDataOnly);
   document.getElementById('deleteAllBtn').addEventListener('click', deleteAllData);
   document.getElementById('libraryLink').addEventListener('click', (e) => {

@@ -77,7 +77,30 @@ to work from.
   the same synced `panelCollapsed` preference (see `refreshPreferencesUI`).
   Autoplay's next-video jump (above) walks this panel's current
   filtered/sorted list, so filtering the playlist by tag also scopes what
-  Autoplay treats as "next."
+  Autoplay treats as "next." The search text, sort mode, and tag-filter
+  selection are themselves synced through `preferences`
+  (`playlistQuery`/`playlistSort`/`playlistTagFilters`) — not just local
+  UI state — specifically so a refresh or a different device doesn't fall
+  back to "all videos" and silently change what Autoplay advances through;
+  `ensurePlaylistPrefsLoaded`/`savePlaylistPrefs`/
+  `syncPlaylistPrefsFromChange` in `js/content.js` load them once per page,
+  write back on every change, and re-apply on a remote/cross-tab
+  preferences update. The tag-filter-bar's own search/sort (for finding a
+  tag to toggle, separate from the filter itself) stays local-only, same
+  as the equivalent controls on the Library page.
+  A sync merge writes bookmarks/tags/videoTags as separate
+  `chrome.storage.local.set()` calls, each firing its own
+  `storage.onChanged` event — `renderPlaylist()` can end up called several
+  times in quick succession as a result. It's a serialized "run, and
+  coalesce anything requested while running into one more run after"
+  wrapper (`playlistRenderRunning`/`playlistRerenderQueued`) around the
+  actual work in `renderPlaylistPass()`/`renderPlaylistTagBar()`, so at
+  most one pass is ever rebuilding the DOM at a time; those passes also
+  build every node up front and commit with a single `replaceChildren`
+  call rather than clearing the list/tag bar and then filling it in a
+  separate step. Both matter — running two passes concurrently, or
+  clearing well before an awaited fetch resolves and filling after, is
+  what let the video list and tag-filter chips end up duplicated.
 - **Tags** (`js/tags.js`) are per video, not per clip: a global tag list
   (`YTM_Storage.getTags`, each `{ id, name, createdAt, updatedAt, deleted }`)
   plus a `videoId -> tagId[]` map (`YTM_Storage.getAllVideoTags`/
@@ -126,7 +149,14 @@ Bookmarks sync as one JSON file per Gist, shaped exactly like this
 {
   "bookmarks": { "<videoId>": [{ "label", "startTime", "endTime", "favorite", "createdAt", "updatedAt" }] },
   "lastModifiedByVideoId": { "<videoId>": 1735353600000 },
-  "preferences": { "autoplay": true, "panelCollapsed": false, "updatedAt": 1735353600000 },
+  "preferences": {
+    "autoplay": true,
+    "panelCollapsed": false,
+    "playlistQuery": "",
+    "playlistSort": "recent",
+    "playlistTagFilters": ["a1b2"],
+    "updatedAt": 1735353600000
+  },
   "tags": [{ "id": "a1b2", "name": "Tutorial", "createdAt": 1735353600000, "updatedAt": 1735353600000 }],
   "tagsLastModified": { "a1b2": 1735353600000 },
   "videoTags": { "<videoId>": ["a1b2"] }
@@ -197,8 +227,18 @@ Bookmarks sync as one JSON file per Gist, shaped exactly like this
   leftover tombstones outright.
 - Gist content is the source of truth for sync; local storage
   (`chrome.storage.local`) is the working cache.
-- The Settings page's "Danger zone" (`js/options.js`) has two destructive
-  actions, both behind a native `confirm()`:
+- The Settings page's "Danger zone" (`js/options.js`) has three destructive
+  actions, all behind a native `confirm()`:
+  - **"Reset local data & re-sync from Gist"** (`resetFromGist`) is a hard
+    pull, not a merge: it discards every local bookmark/tag/preference and
+    replaces it with exactly what `YTM_Gist.fetchData` returns for the
+    configured Gist — unlike `YTM_Sync.run()`, this can lose local-only
+    edits that never made it to the Gist (e.g. from a device that hasn't
+    synced since). Nothing on GitHub is touched, and — unlike the other two
+    actions below — it requires a token + Gist ID already configured.
+    Fetches from the Gist *before* touching local storage at all, so a
+    network/auth failure here leaves local data untouched rather than
+    wiping it first and then failing to refill it.
   - **"Delete data only"** (`YTM_Storage.clearBookmarkData`) clears
     bookmarks/lastModifiedByVideoId/tags/tagsLastModified/videoTags
     locally but leaves `settings` (token, gistId) and `preferences`

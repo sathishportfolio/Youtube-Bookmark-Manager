@@ -14,16 +14,26 @@
   let playQueueHandler = null;
   let videoEndedHandler = null;
 
-  // Playlist panel UI state — per-tab only, not synced (mirrors the search/
-  // sort/filter state manage.js keeps as module-level variables for the
-  // same controls on the Library page). Its show/hide state is not its own
-  // — it follows the main panel's synced `panelCollapsed` preference, so
-  // one toggle (the "🔖 Bookmarks" button) hides/shows both.
+  // Playlist panel UI state. The search text, sort mode, and tag filter
+  // selection (playlistQuery/playlistVideoSort/playlistTagFilters) are the
+  // actual "which videos, in what order" playlist definition — that's
+  // Gist-synced through `preferences` (playlistQuery/playlistSort/
+  // playlistTagFilters) alongside autoplay/panelCollapsed, so a refresh or
+  // a different device doesn't silently fall back to "all videos" and
+  // change what Autoplay's next-video jump walks. Loaded once per page via
+  // ensurePlaylistPrefsLoaded(), then written back on every change.
+  // The tag-filter-bar's own search/sort (playlistTagFilterQuery/Sort —
+  // for finding a tag to toggle, mirroring manage.js's separate tag
+  // manager vs. tag filter bar controls) is just local UI convenience and
+  // isn't synced. Its show/hide state is not its own either — it follows
+  // the main panel's synced `panelCollapsed` preference, so one toggle
+  // (the "🔖 Bookmarks" button) hides/shows both.
   let playlistQuery = '';
   let playlistVideoSort = 'recent';
   const playlistTagFilters = new Set();
   let playlistTagFilterQuery = '';
   let playlistTagFilterSort = 'az';
+  let playlistPrefsLoaded = false;
 
   function getVideoEl() {
     return document.querySelector('video.html5-main-video');
@@ -128,6 +138,51 @@
   // here is also the order autoplay advances through — see
   // advanceToNextPlaylistVideo.
 
+  async function ensurePlaylistPrefsLoaded() {
+    if (playlistPrefsLoaded) return;
+    playlistPrefsLoaded = true;
+    const prefs = await YTM_Storage.getPreferences();
+    applyPlaylistPrefs(prefs);
+  }
+
+  function applyPlaylistPrefs(prefs) {
+    playlistQuery = prefs.playlistQuery || '';
+    playlistVideoSort = prefs.playlistSort || 'recent';
+    playlistTagFilters.clear();
+    for (const id of prefs.playlistTagFilters || []) playlistTagFilters.add(id);
+  }
+
+  async function savePlaylistPrefs() {
+    const prefs = await YTM_Storage.getPreferences();
+    await YTM_Storage.savePreferences({
+      ...prefs,
+      playlistQuery,
+      playlistSort: playlistVideoSort,
+      playlistTagFilters: Array.from(playlistTagFilters),
+      updatedAt: Date.now()
+    });
+  }
+
+  // Reacts to a remote/cross-tab preferences change (e.g. a Gist pull, or
+  // another tab's edit) by re-syncing local playlist state and re-rendering.
+  // Also fires for this tab's own writes (chrome.storage.onChanged doesn't
+  // distinguish the source) — harmless since applyPlaylistPrefs just
+  // reapplies the same values, but the activeElement check avoids yanking
+  // the caret out of the search box while the user is still typing in it.
+  function syncPlaylistPrefsFromChange(newPrefs) {
+    if (!newPrefs) return;
+    applyPlaylistPrefs(newPrefs);
+
+    const panel = document.getElementById(PLAYLIST_PANEL_ID);
+    if (panel) {
+      const searchInput = panel.querySelector('.ytm-playlist-search');
+      if (searchInput && document.activeElement !== searchInput) searchInput.value = playlistQuery;
+      const sortSelect = panel.querySelector('.ytm-playlist-sort');
+      if (sortSelect) sortSelect.value = playlistVideoSort;
+    }
+    renderPlaylist();
+  }
+
   function matchesPlaylistFilter(group, query) {
     if (playlistTagFilters.size > 0 && !group.tags.some((t) => playlistTagFilters.has(t.id))) return false;
     if (!query) return true;
@@ -192,6 +247,7 @@
     const prefs = await YTM_Storage.getPreferences();
     if (prefs.autoplay === false) return;
 
+    await ensurePlaylistPrefsLoaded();
     const groups = await getPlaylistGroups();
     const idx = groups.findIndex((g) => g.videoId === currentVideoId);
     if (idx === -1 || idx + 1 >= groups.length) return;
@@ -540,28 +596,66 @@
       </div>
     `;
 
+    panel.querySelector('.ytm-playlist-search').value = playlistQuery;
+    panel.querySelector('.ytm-playlist-sort').value = playlistVideoSort;
+
     panel.querySelector('.ytm-btn-playlist-autoplay').addEventListener('click', toggleAutoplay);
     panel.querySelector('.ytm-playlist-search').addEventListener('input', (e) => {
       playlistQuery = e.target.value;
       renderPlaylist();
+      savePlaylistPrefs();
     });
     panel.querySelector('.ytm-playlist-sort').addEventListener('change', (e) => {
       playlistVideoSort = e.target.value;
       renderPlaylist();
+      savePlaylistPrefs();
     });
     panel.querySelector('.ytm-playlist-tag-search').addEventListener('input', (e) => {
       playlistTagFilterQuery = e.target.value;
-      renderPlaylistTagBar();
+      renderPlaylist();
     });
     panel.querySelector('.ytm-playlist-tag-sort').addEventListener('change', (e) => {
       playlistTagFilterSort = e.target.value;
-      renderPlaylistTagBar();
+      renderPlaylist();
     });
 
     mainPanel.insertAdjacentElement('afterend', panel);
     return panel;
   }
 
+  function buildTagFilterChip(tag) {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'tag-chip tag-filter-chip' + (playlistTagFilters.has(tag.id) ? ' active' : '');
+    chip.textContent = tag.name;
+    chip.addEventListener('click', () => {
+      if (playlistTagFilters.has(tag.id)) playlistTagFilters.delete(tag.id);
+      else playlistTagFilters.add(tag.id);
+      renderPlaylist();
+      savePlaylistPrefs();
+    });
+    return chip;
+  }
+
+  function buildClearTagFilterButton() {
+    const clearBtn = document.createElement('button');
+    clearBtn.type = 'button';
+    clearBtn.className = 'tag-chip tag-filter-clear';
+    clearBtn.textContent = 'Clear filter';
+    clearBtn.addEventListener('click', () => {
+      playlistTagFilters.clear();
+      renderPlaylist();
+      savePlaylistPrefs();
+    });
+    return clearBtn;
+  }
+
+  // Builds the whole set of tag-filter chip nodes first and swaps them into
+  // the bar with one `replaceChildren` call — a single atomic DOM write —
+  // rather than clearing the bar and then appending into it as two
+  // separate steps with an await in between. That "clear now, fill once
+  // the awaited data arrives" shape is what let overlapping calls (see
+  // renderPlaylist below) interleave and leave duplicate chips behind.
   async function renderPlaylistTagBar() {
     const panel = document.getElementById(PLAYLIST_PANEL_ID);
     if (!panel) return;
@@ -569,46 +663,28 @@
     const controls = panel.querySelector('.ytm-playlist-tag-controls');
     const bar = panel.querySelector('.ytm-playlist-tag-bar');
     const allTags = await YTM_Tags.getAllTags();
+
     controls.hidden = allTags.length === 0;
     bar.hidden = allTags.length === 0;
-    bar.innerHTML = '';
-    if (allTags.length === 0) return;
+    if (allTags.length === 0) {
+      bar.replaceChildren();
+      return;
+    }
 
     const sorted = await YTM_Tags.getAllTags(playlistTagFilterSort);
     const query = playlistTagFilterQuery.trim().toLowerCase();
     const filtered = query ? sorted.filter((t) => t.name.toLowerCase().includes(query)) : sorted;
 
-    for (const tag of filtered) {
-      const chip = document.createElement('button');
-      chip.type = 'button';
-      chip.className = 'tag-chip tag-filter-chip' + (playlistTagFilters.has(tag.id) ? ' active' : '');
-      chip.textContent = tag.name;
-      chip.addEventListener('click', () => {
-        if (playlistTagFilters.has(tag.id)) playlistTagFilters.delete(tag.id);
-        else playlistTagFilters.add(tag.id);
-        renderPlaylist();
-      });
-      bar.appendChild(chip);
-    }
-
+    const nodes = filtered.map((tag) => buildTagFilterChip(tag));
     if (filtered.length === 0) {
       const hint = document.createElement('span');
       hint.className = 'ytm-hint';
       hint.textContent = 'No matching tags.';
-      bar.appendChild(hint);
+      nodes.push(hint);
     }
+    if (playlistTagFilters.size > 0) nodes.push(buildClearTagFilterButton());
 
-    if (playlistTagFilters.size > 0) {
-      const clearBtn = document.createElement('button');
-      clearBtn.type = 'button';
-      clearBtn.className = 'tag-chip tag-filter-clear';
-      clearBtn.textContent = 'Clear filter';
-      clearBtn.addEventListener('click', () => {
-        playlistTagFilters.clear();
-        renderPlaylist();
-      });
-      bar.appendChild(clearBtn);
-    }
+    bar.replaceChildren(...nodes);
   }
 
   function buildPlaylistItem(group) {
@@ -674,24 +750,55 @@
     return li;
   }
 
-  async function renderPlaylist() {
+  let playlistRenderRunning = false;
+  let playlistRerenderQueued = false;
+
+  // renderPlaylist() can be triggered several times in quick succession —
+  // e.g. a sync merge writes bookmarks/tags/videoTags as separate
+  // chrome.storage.local.set() calls, each firing its own storage.onChanged
+  // event, each independently calling this. Running more than one pass
+  // concurrently is what produced duplicate rows/chips: each pass awaits
+  // chrome.storage reads before it knows what to render, so an older pass
+  // could still be mid-flight — clearing and refilling the list — when a
+  // newer one started doing the same thing, and their fills interleaved.
+  // Serializing through this flag ensures only one pass ever runs; any
+  // request that arrives while one is running just sets
+  // playlistRerenderQueued instead of starting a second pass, and the
+  // do/while below turns that into a single up-to-date follow-up pass once
+  // the current one finishes (rather than one pass per request).
+  function renderPlaylist() {
+    if (playlistRenderRunning) {
+      playlistRerenderQueued = true;
+      return;
+    }
+    playlistRenderRunning = true;
+    (async () => {
+      do {
+        playlistRerenderQueued = false;
+        await renderPlaylistPass();
+      } while (playlistRerenderQueued);
+      playlistRenderRunning = false;
+    })();
+  }
+
+  async function renderPlaylistPass() {
+    await ensurePlaylistPrefsLoaded();
     const panel = injectPlaylistPanel();
     if (!panel) return;
 
     await refreshPreferencesUI();
     await renderPlaylistTagBar();
 
+    const allGroups = await YTM_Bookmarks.getAllVideoGroups();
+    const groups = sortPlaylistGroups(allGroups.filter((g) => matchesPlaylistFilter(g, playlistQuery)));
+
+    // One atomic swap (build all nodes first, then a single
+    // replaceChildren call) instead of a separate clear-then-append —
+    // see the comment on renderPlaylist above for why that matters.
     const list = panel.querySelector('.ytm-playlist-list');
     const empty = panel.querySelector('.ytm-playlist-empty');
-    list.innerHTML = '';
-
-    const allGroups = await YTM_Bookmarks.getAllVideoGroups();
     empty.hidden = allGroups.length > 0;
-
-    const groups = sortPlaylistGroups(allGroups.filter((g) => matchesPlaylistFilter(g, playlistQuery)));
-    for (const group of groups) {
-      list.appendChild(buildPlaylistItem(group));
-    }
+    list.replaceChildren(...groups.map((group) => buildPlaylistItem(group)));
   }
 
   // --- seek bar markers ---------------------------------------------------
@@ -853,8 +960,12 @@
       refreshPanel();
       scheduleMarkerRender();
     }
-    if (changes.preferences) refreshPreferencesUI();
-    if (changes.bookmarks || changes.tags || changes.videoTags) renderPlaylist();
+    if (changes.preferences) {
+      refreshPreferencesUI();
+      syncPlaylistPrefsFromChange(changes.preferences.newValue);
+    } else if (changes.bookmarks || changes.tags || changes.videoTags) {
+      renderPlaylist();
+    }
   });
 
   chrome.runtime.onMessage.addListener((message) => {
