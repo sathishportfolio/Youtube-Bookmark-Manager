@@ -167,12 +167,12 @@ const YTM_Row = {
     topRow.className = 'ytm-row-top';
     topRow.append(
       star,
+      editBtn,
       rangeDisplay,
       rangeInput,
       startBtn,
       endBtn,
       notesInput,
-      editBtn,
       saveBtn,
       deleteBtn
     );
