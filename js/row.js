@@ -133,8 +133,15 @@ const YTM_Row = {
     saveBtn.className = 'ytm-icon-btn';
     saveBtn.title = 'Save range and label';
     saveBtn.textContent = '💾';
-    saveBtn.addEventListener('click', async () => {
+    const save = async () => {
       showResult(await actions.onSave(bookmark, rangeInput.value, notesInput.value));
+    };
+    saveBtn.addEventListener('click', save);
+    notesInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') save();
+    });
+    rangeInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') save();
     });
 
     const deleteBtn = document.createElement('button');
