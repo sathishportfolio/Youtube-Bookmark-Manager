@@ -90,21 +90,37 @@
     video.addEventListener('timeupdate', playQueueHandler);
   }
 
-  async function applyPendingPlay() {
-    const pending = await YTM_Storage.getPendingPlay();
-    if (!pending || pending.videoId !== currentVideoId || !video) return;
-    await YTM_Storage.clearPendingPlay();
-
-    const clips = await getBookmarksForCurrentVideo();
-    const bookmark = clips.find((b) => b.id === pending.bookmarkId);
-    if (!bookmark) return;
-
+  async function startPlaybackAt(bookmark) {
     const prefs = await YTM_Storage.getPreferences();
     if (prefs.autoplay === false) {
       video.currentTime = bookmark.startTime;
       video.pause();
     } else {
       playFromBookmark(bookmark);
+    }
+  }
+
+  // On page load: a cross-tab "play this bookmark" request (from the popup)
+  // takes priority; otherwise, if this video already has bookmarks, start
+  // from the earliest one rather than wherever YouTube would normally begin.
+  async function initializePlayback() {
+    if (!video) return;
+
+    const pending = await YTM_Storage.getPendingPlay();
+    if (pending && pending.videoId === currentVideoId) {
+      await YTM_Storage.clearPendingPlay();
+      const clips = await getBookmarksForCurrentVideo();
+      const bookmark = clips.find((b) => b.id === pending.bookmarkId);
+      if (bookmark) {
+        await startPlaybackAt(bookmark);
+        return;
+      }
+    }
+
+    const clips = await getBookmarksForCurrentVideo();
+    const chronological = YTM_Bookmarks.sortByStart(clips);
+    if (chronological.length > 0) {
+      await startPlaybackAt(chronological[0]);
     }
   }
 
@@ -473,7 +489,7 @@
 
     refreshPanel();
     renderMarkers();
-    applyPendingPlay();
+    initializePlayback();
     video.addEventListener('loadedmetadata', renderMarkers);
 
     if (!observer) {
