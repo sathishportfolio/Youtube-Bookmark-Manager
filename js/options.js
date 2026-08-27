@@ -5,6 +5,16 @@ function setStatus(msg, isError = false) {
   el.classList.toggle('error', isError);
 }
 
+function updateGistLink(gistId) {
+  const link = document.getElementById('openGistLink');
+  if (gistId) {
+    link.href = `https://gist.github.com/${gistId}`;
+    link.hidden = false;
+  } else {
+    link.hidden = true;
+  }
+}
+
 async function load() {
   const settings = await YTM_Storage.getSettings();
   document.getElementById('tokenInput').value = settings.token || '';
@@ -12,6 +22,7 @@ async function load() {
   document.getElementById('lastSynced').textContent = settings.lastSyncedAt
     ? `Last synced: ${new Date(settings.lastSyncedAt).toLocaleString()}`
     : 'Never synced yet.';
+  updateGistLink(settings.gistId);
 }
 
 async function save() {
@@ -19,6 +30,7 @@ async function save() {
   const gistId = document.getElementById('gistIdInput').value.trim();
   const settings = await YTM_Storage.getSettings();
   await YTM_Storage.saveSettings({ ...settings, token, gistId });
+  updateGistLink(gistId);
   setStatus('Saved.');
 }
 

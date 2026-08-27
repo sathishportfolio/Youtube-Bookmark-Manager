@@ -1,12 +1,12 @@
 (function () {
-  const BTN_ID = 'ytm-bookmark-btn';
-  const POPOVER_ID = 'ytm-bookmark-popover';
+  const PANEL_ID = 'ytm-panel';
   const MARKER_LAYER_ID = 'ytm-marker-layer';
 
   let currentVideoId = null;
   let video = null;
   let observer = null;
-  let renderScheduled = false;
+  let markerRenderScheduled = false;
+  let presenceCheckScheduled = false;
 
   function getVideoEl() {
     return document.querySelector('video.html5-main-video');
@@ -25,11 +25,13 @@
 
   async function getBookmarksForCurrentVideo() {
     const all = await YTM_Storage.getBookmarks();
-    return Object.values(all).filter((b) => b.videoId === currentVideoId);
+    return Object.values(all)
+      .filter((b) => b.videoId === currentVideoId)
+      .sort((a, b) => (a.startTime || 0) - (b.startTime || 0));
   }
 
-  function findPending(bookmarks) {
-    return bookmarks
+  function findPending(clips) {
+    return clips
       .filter((b) => b.startTime != null && b.endTime == null)
       .sort((a, b) => b.createdAt - a.createdAt)[0] || null;
   }
@@ -54,8 +56,8 @@
     const all = await YTM_Storage.getBookmarks();
     all[bookmark.id] = bookmark;
     await YTM_Storage.saveBookmarks(all);
-    flashButton();
-    renderMarkers();
+    await refreshPanel();
+    scheduleMarkerRender();
   }
 
   async function handleEnd() {
@@ -75,83 +77,133 @@
     pending.updatedAt = Date.now();
     all[pending.id] = pending;
     await YTM_Storage.saveBookmarks(all);
-    flashButton();
-    renderMarkers();
+    await refreshPanel();
+    scheduleMarkerRender();
   }
 
-  function flashButton() {
-    const btn = document.getElementById(BTN_ID);
-    if (!btn) return;
-    btn.classList.add('ytm-flash');
-    setTimeout(() => btn.classList.remove('ytm-flash'), 400);
+  async function deleteClip(id) {
+    const all = await YTM_Storage.getBookmarks();
+    delete all[id];
+    await YTM_Storage.saveBookmarks(all);
+    await refreshPanel();
+    scheduleMarkerRender();
   }
 
-  function closePopover() {
-    document.getElementById(POPOVER_ID)?.remove();
+  async function updateNotes(id, notes) {
+    const all = await YTM_Storage.getBookmarks();
+    if (!all[id]) return;
+    all[id].notes = notes;
+    all[id].updatedAt = Date.now();
+    await YTM_Storage.saveBookmarks(all);
   }
 
-  function togglePopover() {
-    if (document.getElementById(POPOVER_ID)) {
-      closePopover();
-      return;
-    }
-    const btn = document.getElementById(BTN_ID);
-    if (!btn) return;
+  function seekTo(seconds) {
+    if (!video) return;
+    video.currentTime = seconds;
+    video.play().catch(() => {});
+  }
 
-    const popover = document.createElement('div');
-    popover.id = POPOVER_ID;
-    popover.className = 'ytm-popover';
+  function findTitleAnchor() {
+    return (
+      document.querySelector('ytd-watch-metadata #title') ||
+      document.querySelector('#above-the-fold #title') ||
+      document.querySelector('#title.ytd-watch-metadata')
+    );
+  }
+
+  function injectPanel() {
+    const existing = document.getElementById(PANEL_ID);
+    if (existing) return existing;
+
+    const anchor = findTitleAnchor();
+    if (!anchor || !anchor.parentElement) return null;
+
+    const panel = document.createElement('div');
+    panel.id = PANEL_ID;
+    panel.innerHTML = `
+      <div class="ytm-panel-actions">
+        <button type="button" class="ytm-btn ytm-btn-start">🔖 Bookmark start</button>
+        <button type="button" class="ytm-btn ytm-btn-end" disabled>🏁 Bookmark end</button>
+        <span class="ytm-hint"></span>
+      </div>
+      <ul class="ytm-clip-list"></ul>
+    `;
+
+    panel.querySelector('.ytm-btn-start').addEventListener('click', handleStart);
+    panel.querySelector('.ytm-btn-end').addEventListener('click', handleEnd);
+
+    anchor.parentElement.insertBefore(panel, anchor);
+    return panel;
+  }
+
+  function renderClipRow(bookmark) {
+    const li = document.createElement('li');
+    li.className = 'ytm-clip';
 
     const startBtn = document.createElement('button');
-    startBtn.className = 'ytm-popover-btn';
     startBtn.type = 'button';
-    startBtn.innerHTML =
-      '<svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z"/></svg><span>Bookmark start</span>';
-    startBtn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      await handleStart();
-      closePopover();
-    });
+    startBtn.className = 'ytm-time';
+    startBtn.textContent = YTM_Youtube.formatTime(bookmark.startTime);
+    startBtn.addEventListener('click', () => seekTo(bookmark.startTime));
+    li.appendChild(startBtn);
 
-    const endBtn = document.createElement('button');
-    endBtn.className = 'ytm-popover-btn';
-    endBtn.type = 'button';
-    endBtn.innerHTML =
-      '<svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M6 3h11l-3 4 3 4H6v10H4V3z"/></svg><span>Bookmark end</span>';
-    endBtn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      await handleEnd();
-      closePopover();
-    });
+    if (bookmark.endTime != null) {
+      const arrow = document.createElement('span');
+      arrow.className = 'ytm-arrow';
+      arrow.textContent = '→';
+      li.appendChild(arrow);
 
-    popover.append(startBtn, endBtn);
-    btn.insertAdjacentElement('afterend', popover);
+      const endBtn = document.createElement('button');
+      endBtn.type = 'button';
+      endBtn.className = 'ytm-time';
+      endBtn.textContent = YTM_Youtube.formatTime(bookmark.endTime);
+      endBtn.addEventListener('click', () => seekTo(bookmark.endTime));
+      li.appendChild(endBtn);
+    } else {
+      const pending = document.createElement('span');
+      pending.className = 'ytm-pending';
+      pending.textContent = 'no end set';
+      li.appendChild(pending);
+    }
 
-    setTimeout(() => document.addEventListener('click', closePopover, { once: true }), 0);
+    const notes = document.createElement('input');
+    notes.type = 'text';
+    notes.className = 'ytm-notes';
+    notes.placeholder = 'Notes…';
+    notes.value = bookmark.notes || '';
+    notes.addEventListener('change', () => updateNotes(bookmark.id, notes.value));
+    li.appendChild(notes);
+
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'ytm-delete';
+    del.title = 'Delete';
+    del.textContent = '✕';
+    del.addEventListener('click', () => deleteClip(bookmark.id));
+    li.appendChild(del);
+
+    return li;
   }
 
-  function injectButton() {
-    if (document.getElementById(BTN_ID)) return;
-    const container = document.querySelector('.ytp-left-controls');
-    if (!container) return;
+  async function refreshPanel() {
+    const panel = injectPanel();
+    if (!panel) return;
 
-    const anchor =
-      container.querySelector('.ytp-volume-panel') || container.querySelector('.ytp-mute-button');
+    const clips = await getBookmarksForCurrentVideo();
+    const pending = findPending(clips);
 
-    const btn = document.createElement('button');
-    btn.id = BTN_ID;
-    btn.className = 'ytp-button ytm-bookmark-btn';
-    btn.type = 'button';
-    btn.title = 'YouTube Manager: bookmark this moment';
-    btn.innerHTML =
-      '<svg viewBox="0 0 24 24" width="24" height="24"><path fill="#fff" d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z"/></svg>';
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      togglePopover();
-    });
+    const endBtn = panel.querySelector('.ytm-btn-end');
+    const hint = panel.querySelector('.ytm-hint');
+    endBtn.disabled = !pending;
+    hint.textContent = pending
+      ? `Clip started at ${YTM_Youtube.formatTime(pending.startTime)} — click "Bookmark end" to finish it.`
+      : '';
 
-    if (anchor) anchor.insertAdjacentElement('afterend', btn);
-    else container.appendChild(btn);
+    const list = panel.querySelector('.ytm-clip-list');
+    list.innerHTML = '';
+    for (const clip of clips) {
+      list.appendChild(renderClipRow(clip));
+    }
   }
 
   function ensureMarkerLayer() {
@@ -175,10 +227,10 @@
     if (!layer || !video || !video.duration) return;
     layer.innerHTML = '';
 
-    const bookmarks = await getBookmarksForCurrentVideo();
+    const clips = await getBookmarksForCurrentVideo();
     const duration = video.duration;
 
-    for (const b of bookmarks) {
+    for (const b of clips) {
       if (b.startTime == null) continue;
       const startPct = Math.min(100, (b.startTime / duration) * 100);
       const startEl = document.createElement('div');
@@ -202,53 +254,60 @@
     }
   }
 
-  function scheduleRender() {
-    if (renderScheduled) return;
-    renderScheduled = true;
+  function scheduleMarkerRender() {
+    if (markerRenderScheduled) return;
+    markerRenderScheduled = true;
     requestAnimationFrame(() => {
-      renderScheduled = false;
+      markerRenderScheduled = false;
       renderMarkers();
     });
   }
 
-  function seekTo(seconds) {
-    if (!video) return;
-    video.currentTime = seconds;
-    video.play().catch(() => {});
+  function schedulePresenceCheck() {
+    if (presenceCheckScheduled) return;
+    presenceCheckScheduled = true;
+    requestAnimationFrame(() => {
+      presenceCheckScheduled = false;
+      if (!document.getElementById(PANEL_ID)) {
+        injectPanel();
+        refreshPanel();
+      }
+      if (!document.getElementById(MARKER_LAYER_ID)) scheduleMarkerRender();
+    });
   }
 
   function setup() {
     currentVideoId = YTM_Youtube.extractVideoId(location.href);
     if (!currentVideoId) return;
     video = getVideoEl();
-    if (!video) {
+
+    const panel = injectPanel();
+    if (!panel || !video) {
       setTimeout(setup, 500);
       return;
     }
 
-    injectButton();
+    refreshPanel();
     renderMarkers();
     video.addEventListener('loadedmetadata', renderMarkers);
 
-    const player = document.querySelector('#movie_player');
-    if (!observer && player) {
-      observer = new MutationObserver(() => {
-        if (!document.getElementById(BTN_ID)) injectButton();
-        if (!document.getElementById(MARKER_LAYER_ID)) scheduleRender();
-      });
-      observer.observe(player, { childList: true, subtree: true });
+    if (!observer) {
+      observer = new MutationObserver(schedulePresenceCheck);
+      observer.observe(document.body, { childList: true, subtree: true });
     }
   }
 
   function teardown() {
-    document.getElementById(BTN_ID)?.remove();
-    document.getElementById(POPOVER_ID)?.remove();
+    document.getElementById(PANEL_ID)?.remove();
     document.getElementById(MARKER_LAYER_ID)?.remove();
     if (video) video.removeEventListener('loadedmetadata', renderMarkers);
   }
 
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && changes.bookmarks) scheduleRender();
+    if (area === 'local' && changes.bookmarks) {
+      refreshPanel();
+      scheduleMarkerRender();
+    }
   });
 
   chrome.runtime.onMessage.addListener((message) => {

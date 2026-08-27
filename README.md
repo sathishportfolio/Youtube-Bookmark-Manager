@@ -10,16 +10,18 @@ third-party account required beyond GitHub.
 
 ## Features
 
-- **Bookmark start/end points** — click the 🔖 icon next to the volume
-  control on any playing video, then **Bookmark start** and (later)
-  **Bookmark end** to mark a clip.
+- **Bookmark start/end points** — a small panel appears above the video
+  title on every watch page with **Bookmark start** and **Bookmark end**
+  buttons for marking a clip, plus the clip list for that video right there.
 - **Multiple clips per video** — bookmark as many moments in the same video
   as you like; each one is tracked separately.
 - **Seek bar markers** — start/end points are highlighted directly on the
   YouTube progress bar while you watch.
-- **Quick start from anywhere** — right-click any YouTube page or video link
-  and choose *"YouTube Manager: bookmark start here"* to save the current
-  playback position without opening the popup.
+- **Quick actions from anywhere** — right-click any YouTube page or video
+  link and choose *"YouTube Manager: bookmark start here"* to save the
+  current playback position without opening the popup. Once a clip has a
+  start but no end, a second option — *"bookmark end here"* — appears in the
+  same menu.
 - **Notes and cleanup** — add notes to any saved clip, delete clips with a
   single click.
 - **Resume playback** — click any timestamp in the popup to jump straight to
@@ -42,7 +44,7 @@ third-party account required beyond GitHub.
 | Sync backend | [GitHub Gist API](https://docs.github.com/en/rest/gists) — one JSON file per gist |
 | Permissions | `storage`, `activeTab`, `scripting`, `contextMenus`, `tabs` |
 | Host permissions | `https://api.github.com/*`, `*://*.youtube.com/*` |
-| Content script | Injected on `youtube.com/watch*` pages — adds the bookmark icon, seek-bar markers, and handles resume-playback messages |
+| Content script | Injected on `youtube.com/watch*` pages — adds the bookmark panel above the title, seek-bar markers, and handles resume-playback messages |
 
 ### Project structure
 
@@ -55,7 +57,7 @@ js/
   storage.js            chrome.storage.local wrapper
   gist.js               GitHub Gist API client + merge logic
   youtube.js             Video ID extraction, thumbnail/time helpers, page metadata scraping
-  content.js              Injected into YouTube watch pages: bookmark icon, start/end capture, seek-bar markers, resume messaging
+  content.js              Injected into YouTube watch pages: bookmark panel, start/end capture, seek-bar markers, resume messaging
   background.js           Service worker: right-click "quick start" bookmark
   popup.js                 Popup UI logic
   options.js                Settings page logic
@@ -99,18 +101,23 @@ This extension isn't on the Chrome Web Store yet — install it unpacked:
 ## Usage
 
 1. Navigate to and open any video you want to save.
-2. Wait for the video to play, then click the 🔖 **Bookmark** icon next to
-   the volume control.
+2. Wait for the video to play, then use the bookmark panel that appears
+   above the video title.
 3. Click **Bookmark start** to add the video to your list at the current
    time.
-4. Keep watching, then reopen the 🔖 icon and click **Bookmark end** to set
-   the end time for that clip.
+4. Keep watching, then click **Bookmark end** (in the same panel, or via the
+   right-click menu) to set the end time for that clip.
 5. Bookmarked start and end times are highlighted directly on the YouTube
    seek bar.
-6. Open the extension popup to add notes to saved bookmarks or delete them
-   with a single click.
-7. Click any timestamp in your bookmarks list to resume watching from that
-   point.
+6. Add notes to saved bookmarks or delete them with a single click — either
+   in the panel or in the extension popup.
+7. Click any timestamp — in the panel or in the popup — to resume watching
+   from that point.
+
+Right-clicking a YouTube page or video link offers the same two steps
+without opening the panel: *"bookmark start here"* always shows up, and
+*"bookmark end here"* appears once that video has a clip waiting for an end
+time.
 
 ### Set up Gist sync
 

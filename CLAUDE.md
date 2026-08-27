@@ -13,8 +13,9 @@ to work from.
 ## Core features (target v1)
 
 - Bookmark specific moments in a video: a start point and (optionally) an
-  end point, set via a 🔖 icon injected into the YouTube player next to the
-  volume control, or via a right-click "quick start" context menu item.
+  end point, set via a panel injected above the video title, or via
+  right-click context menu items ("bookmark start here", and "bookmark end
+  here" once a clip is pending an end time).
 - A video can have multiple bookmarked clips. Start/end times are shown as
   markers directly on the YouTube seek bar.
 - Popup groups clips by video; each clip has editable notes, single-click

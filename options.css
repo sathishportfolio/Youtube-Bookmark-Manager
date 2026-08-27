@@ -17,5 +17,7 @@ input[type="text"] {
   background: var(--bg);
   color: var(--fg);
 }
-.button-row { display: flex; gap: 8px; margin-top: 12px; }
+.button-row { display: flex; gap: 8px; align-items: center; margin-top: 12px; }
 a { color: var(--accent); }
+.button-link { font-size: 12px; text-decoration: none; }
+.button-link:hover { text-decoration: underline; }
