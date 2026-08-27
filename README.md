@@ -18,8 +18,8 @@ third-party account required beyond GitHub.
   as you like; each one is tracked separately.
 - **Clickable start/end** — every clip's timestamps are links: click the
   start time to play from there, click the end time to jump straight to
-  that point. Hovering the timestamps shows the clip's duration (`30sec`,
-  `2min`, `1hr`).
+  that point. The duration shows visibly right after the end time, e.g.
+  `1:10 → 2:00 (50sec)` or `1:00:00 → 2:20:00 (1hr 20min)`.
 - **Chained playback** — clicking a clip's start time (or a seek-bar
   marker) plays that clip and, if the video has more bookmarks after it,
   keeps going: at each clip's end it jumps straight to the next bookmark's

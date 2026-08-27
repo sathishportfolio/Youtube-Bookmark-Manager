@@ -33,15 +33,18 @@ const YTM_Bookmarks = {
     return `${start}-${YTM_Youtube.formatTime(bookmark.endTime)}`;
   },
 
-  // Human-friendly clip duration for info display, e.g. "30sec", "2min", "1hr".
+  // Human-friendly clip duration for info display, e.g. "1sec", "2min",
+  // "1hr 20min" — combines the top two non-zero units (hr+min, or
+  // min+sec), dropping seconds once hours are involved.
   durationLabel(bookmark) {
     if (bookmark.startTime == null || bookmark.endTime == null) return '';
     const total = Math.max(0, Math.round(bookmark.endTime - bookmark.startTime));
-    if (total < 60) return `${total}sec`;
-    const minutes = Math.round(total / 60);
-    if (minutes < 60) return `${minutes}min`;
-    const hours = Math.round(minutes / 60);
-    return `${hours}hr`;
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    if (h > 0) return m > 0 ? `${h}hr ${m}min` : `${h}hr`;
+    if (m > 0) return s > 0 ? `${m}min ${s}sec` : `${m}min`;
+    return `${s}sec`;
   },
 
   sortByStart(clips) {

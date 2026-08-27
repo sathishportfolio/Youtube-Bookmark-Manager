@@ -131,6 +131,7 @@ button.danger { color: #dc2626; border-color: #dc2626; }
 }
 .ytm-time-link:hover { background: rgba(128, 128, 128, 0.1); border-radius: 4px; }
 .ytm-arrow { color: var(--muted); font-size: 11px; }
+.ytm-duration { color: var(--muted); font-size: 11px; white-space: nowrap; }
 .ytm-range-input {
   width: 92px;
   border: 1px solid var(--border);

@@ -1,27 +1,8 @@
 const YTM_Row = {
-  // Full row: favorite, clickable start/end, mark start/end, label, edit,
-  // save, delete. Used by the in-page panel and the Library page.
-  //
-  // actions: {
-  //   canMarkTime: boolean,
-  //   onToggleFavorite(bookmark),
-  //   onPlayFrom(bookmark, point) — point is 'start' or 'end',
-  //   onMarkStart(bookmark) -> Promise<{ok, message}>,
-  //   onMarkEnd(bookmark) -> Promise<{ok, message}>,
-  //   onSave(bookmark, rangeText, labelText) -> Promise<{ok, message}>,
-  //   onDelete(bookmark)
-  // }
-  render(bookmark, actions) {
-    const li = document.createElement('li');
-    li.className = 'ytm-row';
-
-    const star = document.createElement('button');
-    star.type = 'button';
-    star.className = 'ytm-icon-btn ytm-star' + (bookmark.favorite ? ' active' : '');
-    star.title = bookmark.favorite ? 'Unfavorite' : 'Favorite';
-    star.textContent = bookmark.favorite ? '★' : '☆';
-    star.addEventListener('click', () => actions.onToggleFavorite(bookmark));
-
+  // Builds the clickable start/end range display shared by both the full
+  // and minimal rows: start plays from there, end plays from there, and
+  // the duration (if an end is set) shows visibly in parentheses after it.
+  _buildRangeDisplay(bookmark, actions) {
     const rangeDisplay = document.createElement('span');
     rangeDisplay.className = 'ytm-range-display';
 
@@ -47,8 +28,39 @@ const YTM_Row = {
       endLink.addEventListener('click', () => actions.onPlayFrom(bookmark, 'end'));
       rangeDisplay.appendChild(endLink);
 
-      rangeDisplay.title = YTM_Bookmarks.durationLabel(bookmark);
+      const duration = document.createElement('span');
+      duration.className = 'ytm-duration';
+      duration.textContent = `(${YTM_Bookmarks.durationLabel(bookmark)})`;
+      rangeDisplay.appendChild(duration);
     }
+
+    return rangeDisplay;
+  },
+
+  // Full row: favorite, clickable start/end, mark start/end, label, edit,
+  // save, delete. Used by the in-page panel and the Library page.
+  //
+  // actions: {
+  //   canMarkTime: boolean,
+  //   onToggleFavorite(bookmark),
+  //   onPlayFrom(bookmark, point) — point is 'start' or 'end',
+  //   onMarkStart(bookmark) -> Promise<{ok, message}>,
+  //   onMarkEnd(bookmark) -> Promise<{ok, message}>,
+  //   onSave(bookmark, rangeText, labelText) -> Promise<{ok, message}>,
+  //   onDelete(bookmark)
+  // }
+  render(bookmark, actions) {
+    const li = document.createElement('li');
+    li.className = 'ytm-row';
+
+    const star = document.createElement('button');
+    star.type = 'button';
+    star.className = 'ytm-icon-btn ytm-star' + (bookmark.favorite ? ' active' : '');
+    star.title = bookmark.favorite ? 'Unfavorite' : 'Favorite';
+    star.textContent = bookmark.favorite ? '★' : '☆';
+    star.addEventListener('click', () => actions.onToggleFavorite(bookmark));
+
+    const rangeDisplay = this._buildRangeDisplay(bookmark, actions);
 
     const rangeInput = document.createElement('input');
     rangeInput.type = 'text';
@@ -177,33 +189,7 @@ const YTM_Row = {
     const li = document.createElement('li');
     li.className = 'ytm-row ytm-row-minimal';
 
-    const rangeDisplay = document.createElement('span');
-    rangeDisplay.className = 'ytm-range-display';
-
-    const startLink = document.createElement('button');
-    startLink.type = 'button';
-    startLink.className = 'ytm-time-link';
-    startLink.title = 'Play from start';
-    startLink.textContent = YTM_Youtube.formatTime(bookmark.startTime);
-    startLink.addEventListener('click', () => actions.onPlayFrom(bookmark, 'start'));
-    rangeDisplay.appendChild(startLink);
-
-    if (bookmark.endTime != null) {
-      const arrow = document.createElement('span');
-      arrow.className = 'ytm-arrow';
-      arrow.textContent = '→';
-      rangeDisplay.appendChild(arrow);
-
-      const endLink = document.createElement('button');
-      endLink.type = 'button';
-      endLink.className = 'ytm-time-link';
-      endLink.title = 'Play from end';
-      endLink.textContent = YTM_Youtube.formatTime(bookmark.endTime);
-      endLink.addEventListener('click', () => actions.onPlayFrom(bookmark, 'end'));
-      rangeDisplay.appendChild(endLink);
-
-      rangeDisplay.title = YTM_Bookmarks.durationLabel(bookmark);
-    }
+    const rangeDisplay = this._buildRangeDisplay(bookmark, actions);
 
     const label = document.createElement('span');
     label.className = 'ytm-label-text';
