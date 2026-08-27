@@ -1,0 +1,36 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>YouTube Manager</title>
+<link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <h1>YouTube Manager</h1>
+    <div class="header-actions">
+      <button id="syncBtn" title="Sync with Gist">⟲ Sync</button>
+      <button id="optionsBtn" title="Settings">⚙</button>
+    </div>
+  </header>
+
+  <div id="addSection">
+    <button id="addCurrentBtn" disabled>+ Bookmark current video</button>
+    <p id="addHint" class="hint"></p>
+  </div>
+
+  <div id="controls">
+    <input id="searchInput" type="search" placeholder="Search title, channel, tag…">
+    <label class="checkbox"><input type="checkbox" id="hideWatched"> Hide watched</label>
+  </div>
+
+  <ul id="bookmarkList"></ul>
+  <p id="emptyState" class="hint" hidden>No bookmarks yet. Open a YouTube video and click "Bookmark current video".</p>
+  <p id="statusMsg" class="status" hidden></p>
+
+  <script src="js/storage.js"></script>
+  <script src="js/gist.js"></script>
+  <script src="js/youtube.js"></script>
+  <script src="js/popup.js"></script>
+</body>
+</html>

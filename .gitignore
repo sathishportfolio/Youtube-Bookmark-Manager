@@ -1,0 +1,16 @@
+# Secrets — never commit tokens/config that could hold one
+.env
+.env.*
+*.local
+
+# Editor / OS cruft
+.DS_Store
+Thumbs.db
+
+# Packaged extension builds
+*.crx
+*.pem
+*.zip
+
+# Personal notes, kept out of the public repo
+developer-notes.md

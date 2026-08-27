@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "YouTube Manager",
+  "version": "0.1.0",
+  "description": "Bookmark and organize YouTube videos, synced to your own GitHub Gist.",
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "options_page": "options.html",
+  "background": {
+    "service_worker": "js/background.js"
+  },
+  "permissions": ["storage", "activeTab", "scripting", "contextMenus"],
+  "host_permissions": ["https://api.github.com/*", "*://*.youtube.com/*"]
+}

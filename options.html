@@ -1,0 +1,44 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>YouTube Manager — Settings</title>
+<link rel="stylesheet" href="popup.css">
+<link rel="stylesheet" href="options.css">
+</head>
+<body class="options-page">
+  <h1>YouTube Manager — Settings</h1>
+
+  <section>
+    <h2>GitHub Gist sync</h2>
+    <p class="hint">
+      Create a token at
+      <a href="https://github.com/settings/tokens/new?scopes=gist&description=YouTube%20Manager" target="_blank" rel="noopener">github.com/settings/tokens</a>
+      with only the <strong>gist</strong> scope. The token is stored locally in this browser
+      (chrome.storage.local) and is only ever sent to api.github.com.
+    </p>
+
+    <label>
+      Personal access token
+      <input type="password" id="tokenInput" placeholder="ghp_…" autocomplete="off">
+    </label>
+
+    <label>
+      Gist ID <span class="hint">(leave blank to create a new private gist on first sync)</span>
+      <input type="text" id="gistIdInput" placeholder="auto-created on first sync">
+    </label>
+
+    <div class="button-row">
+      <button id="testBtn">Test connection</button>
+      <button id="saveBtn">Save</button>
+    </div>
+
+    <p id="settingsStatus" class="status" hidden></p>
+    <p id="lastSynced" class="hint"></p>
+  </section>
+
+  <script src="js/storage.js"></script>
+  <script src="js/gist.js"></script>
+  <script src="js/options.js"></script>
+</body>
+</html>
