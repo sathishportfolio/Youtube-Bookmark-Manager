@@ -16,33 +16,44 @@ third-party account required beyond GitHub.
   hover for a tooltip (time range + notes), click to play that range.
 - **Multiple clips per video** — bookmark as many moments in the same video
   as you like; each one is tracked separately.
-- **Full row controls**, in the panel, popup, and Library page alike, for
-  every clip, in one line:
+- **Clickable start/end** — every clip's timestamps are links: click the
+  start time to play from there, click the end time to jump straight to
+  that point. Hovering the timestamps shows the clip's duration (`30sec`,
+  `2min`, `1hr`).
+- **Chained playback** — clicking a clip's start time (or a seek-bar
+  marker) plays that clip and, if the video has more bookmarks after it,
+  keeps going: at each clip's end it jumps straight to the next bookmark's
+  start rather than stopping, skipping the untagged gap between them. It
+  only pauses at a clip's end if that clip is the *last* bookmark for the
+  video; a clip left with no end time is never a jump point, so playback
+  just continues through it normally (finishing the video, if it's the
+  last one). Clicking an *end* time is a plain jump-and-play, with no
+  chaining.
+- **Full row controls** in the in-page panel and the Library page (see
+  below) for every clip, in one line:
   - ★ **Favorite** toggle (marks a clip — never reorders the list, which
     always stays in timestamp order)
-  - ▶ **Play from here** — see below for what "play" actually does
-  - An editable **timestamp field** (`1:10` or `1:10-2:00`) — hover it to
-    see the clip's duration (`30sec`, `2min`, `1hr`)
+  - The clickable start/end timestamps described above
   - **⏮ Mark start** / **⏭ Mark end** icons that capture the current
     playback position (marking a start identical to another clip's is
     blocked)
   - An editable **label** field (short text, not long-form notes)
-  - 💾 **Save** applies the timestamp/label edits; **✕ Delete** removes the
-    clip immediately. Unsaved edits highlight the field and Save button
-    until you save them.
-- **Chained playback** — clicking ▶ Play (or a seek-bar marker) plays that
-  clip and, if the video has more bookmarks after it, keeps going: at each
-  clip's end it jumps straight to the next bookmark's start rather than
-  stopping, skipping the untagged gap between them. It only pauses at a
-  clip's end if that clip is the *last* bookmark for the video; a clip left
-  with no end time is never a jump point, so playback just continues
-  through it normally (finishing the video, if it's the last one).
+  - **✏️ Edit** reveals a typeable range field (`1:10` or `1:10-2:00`) in
+    place of the links; **💾 Save** applies the range/label edits — unsaved
+    edits highlight the field and Save button until you save them — and
+    **✕ Delete** removes the clip immediately.
 - **Manual add row** — separate timestamp (`1:10` or `1:10-2:00`) and label
-  fields to add a clip without touching playback.
+  fields to add a clip without touching playback (panel and Library page).
 - **Raw text editor** — bulk add/edit a video's clips as plain text
-  (`* 1:10-2:00 label`, one per line; a leading `*` marks it a favorite).
+  (`* 1:10-2:00 label`, one per line; a leading `*` marks it a favorite)
+  (panel and Library page).
 - **Copy all** — export a video's clips as that same raw text, to your
-  clipboard.
+  clipboard (panel and Library page).
+- **Popup stays minimal** — the toolbar popup only ever shows, per video:
+  the thumbnail/title, each clip's clickable start/end range, its label,
+  and a delete button. Everything else above (favoriting, marking,
+  editing, manual add, raw text, copy) lives in the in-page panel and the
+  Library page.
 - **Autoplay toggle** — a global, Gist-synced preference that controls
   chained playback (see above). **On**: Play jumps between bookmarks and
   stops after the last one. **Off**: Play just seeks to that bookmark and
@@ -52,10 +63,11 @@ third-party account required beyond GitHub.
   link and choose *"bookmark start here"* to save the current playback
   position without opening the popup or panel. Once a clip has a start but
   no end, *"bookmark end here"* appears in the same menu.
-- **Library page** — a full browser tab (not popup-width-constrained) for
-  managing every bookmarked video at once, with the same row controls,
-  search, add row, raw-text editor, and Copy all as the popup. Open it from
-  the popup's **📚 Library** button or the link on the Settings page.
+- **Library page** — a full browser tab (not popup-width-constrained) with
+  the *full* row controls (favorite, mark start/end, edit, save, manual
+  add, raw-text editor, copy all) for managing every bookmarked video at
+  once. Open it from the popup's **📚 Library** button or the link on the
+  Settings page.
 - **Gist sync** — push and pull your bookmarks (and the Autoplay
   preference) to a private GitHub Gist so they follow you across machines
   and browsers. Sync uses a simple last-write-wins merge, so it's safe to
@@ -162,23 +174,26 @@ This extension isn't on the Chrome Web Store yet — install it unpacked:
 
 1. Navigate to and open any video you want to save.
 2. Wait for the video to play, then use the bookmark panel above the video
-   title (the same controls are also available per-video in the popup).
+   title.
 3. Click **Bookmark start** to add the video to your list at the current
    time.
-4. Keep watching, then click **Bookmark end** (or the row's own **Mark
+4. Keep watching, then click **Bookmark end** (or the row's own **⏭ Mark
    end** icon) to set the end time for that clip.
 5. Clips are highlighted directly on the YouTube seek bar — hover a marker
-   for its time range and notes, click it to play that range.
-6. On any clip row: ★ favorite it, ▶ play from it (continuing into later
-   bookmarks — see Features above), edit the timestamp field or label and
-   click 💾 to save, or click ✕ to delete it.
-7. Use the **Add** row's timestamp and label fields to add a clip without
-   touching playback, or **Raw text** to bulk add/edit a video's clips as
-   plain text. **Copy all** copies that video's clips as the same text
-   format.
-8. Toggle **Autoplay** (synced across your devices) to control whether Play
-   chains between bookmarks (on) or just plays normally from the clicked
-   point with no jumping or pausing (off).
+   for its time range and label, click it to play that range.
+6. On any clip row (panel or Library page): ★ favorite it, click its start
+   or end timestamp to play from that point (start chains into later
+   bookmarks — see Features above), click **✏️** to edit the range as text
+   and **💾** to save it along with the label, or click ✕ to delete it.
+   The popup shows a lighter version of each row — clickable start/end,
+   label, and delete only.
+7. In the panel or Library page, use the **Add** row's timestamp and label
+   fields to add a clip without touching playback, or **Raw text** to bulk
+   add/edit a video's clips as plain text. **Copy all** copies that video's
+   clips as the same text format.
+8. Toggle **Autoplay** (synced across your devices) to control whether
+   clicking a clip's start chains into later bookmarks (on) or just plays
+   normally from that point with no jumping or pausing (off).
 
 Right-clicking a YouTube page or video link offers a shortcut for the first
 two steps without opening the panel: *"bookmark start here"* always shows

@@ -19,26 +19,33 @@ to work from.
 - A video can have multiple bookmarked clips. Start/end times are shown as
   dominant, hoverable markers directly on the YouTube seek bar (tooltip with
   time range + notes; click to play that range).
-- Every clip row (panel, popup, and Library page all share the same
-  component, `js/row.js`) has: favorite toggle (display order is always
-  chronological — favoriting never reorders), play-from-here, an editable
-  timestamp field (`1:10` / `1:10-2:00`, hover for duration), ⏮/⏭
-  mark-start/mark-end from current playback (blocks duplicate start times),
-  a label field, explicit save (unsaved edits highlight until saved), and
-  delete.
+- `js/row.js` exports two renderers: `render` (full — panel and Library
+  page) and `renderMinimal` (popup only). Full rows have: favorite toggle
+  (display order is always chronological — favoriting never reorders),
+  clickable start/end timestamps (start chains playback into later
+  bookmarks per Autoplay, end just jumps-and-plays with no chaining — see
+  `playFromPoint` in `js/content.js`), ⏮/⏭ mark-start/mark-end from
+  current playback (blocks duplicate start times), a label field, an ✏️
+  edit toggle that swaps the timestamps for a typeable range field, 💾 save
+  (unsaved range/label edits highlight until saved), and delete. Minimal
+  rows drop everything except the clickable start/end timestamps, label,
+  and delete — `popup.js` decides which renderer to use by checking for
+  the `manage-page` class on `<body>`.
 - `manage.html` is a full-tab "Library" page reusing `popup.js`/`popup.css`
-  verbatim (same element IDs) with `manage.css` only widening the layout —
-  opened via the popup's Library button or the Settings page link.
+  verbatim (same element IDs, gated to the full-row/full-toolbar behavior
+  via that body class) with `manage.css` only widening the layout — opened
+  via the popup's Library button or the Settings page link.
 - Per video: a manual add-by-typed-time row, a raw-text bulk editor, and a
   "copy all as text" export — see `js/bookmarks.js` for the parsing/format
   and mutation logic shared by both surfaces.
 - Autoplay is a global preference synced through the Gist alongside
   bookmarks (see the combined `{bookmarks, preferences}` payload in
-  `js/gist.js`). It gates the chained-playback behavior itself: on, Play
-  jumps between bookmarks and stops after the last one; off, Play just
-  seeks and plays the video normally from that point, with no jumping or
-  pausing at clip boundaries. Both branches live in `playFromBookmark` in
-  `js/content.js`.
+  `js/gist.js`). It gates the chained-playback behavior itself: on, playing
+  from a clip's start jumps between bookmarks and stops after the last one;
+  off, it just seeks and plays the video normally from that point, with no
+  jumping or pausing at clip boundaries. Both branches live in
+  `playFromBookmark` in `js/content.js`; `playFromPoint` wraps it to handle
+  the separate (never-chained) "play from end" case.
 - Sync bookmarks to a GitHub Gist:
   - Gist content is the source of truth; local storage is a cache.
   - Push local changes to the Gist, pull remote changes into local storage.

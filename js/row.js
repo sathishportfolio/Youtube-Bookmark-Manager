@@ -1,8 +1,11 @@
 const YTM_Row = {
+  // Full row: favorite, clickable start/end, mark start/end, label, edit,
+  // save, delete. Used by the in-page panel and the Library page.
+  //
   // actions: {
   //   canMarkTime: boolean,
   //   onToggleFavorite(bookmark),
-  //   onPlay(bookmark) -> Promise<{ok, message}>,
+  //   onPlayFrom(bookmark, point) — point is 'start' or 'end',
   //   onMarkStart(bookmark) -> Promise<{ok, message}>,
   //   onMarkEnd(bookmark) -> Promise<{ok, message}>,
   //   onSave(bookmark, rangeText, labelText) -> Promise<{ok, message}>,
@@ -19,12 +22,33 @@ const YTM_Row = {
     star.textContent = bookmark.favorite ? '★' : '☆';
     star.addEventListener('click', () => actions.onToggleFavorite(bookmark));
 
-    const playBtn = document.createElement('button');
-    playBtn.type = 'button';
-    playBtn.className = 'ytm-icon-btn';
-    playBtn.title = 'Play from here';
-    playBtn.textContent = '▶';
-    playBtn.addEventListener('click', () => actions.onPlay(bookmark));
+    const rangeDisplay = document.createElement('span');
+    rangeDisplay.className = 'ytm-range-display';
+
+    const startLink = document.createElement('button');
+    startLink.type = 'button';
+    startLink.className = 'ytm-time-link';
+    startLink.title = 'Play from start';
+    startLink.textContent = YTM_Youtube.formatTime(bookmark.startTime);
+    startLink.addEventListener('click', () => actions.onPlayFrom(bookmark, 'start'));
+    rangeDisplay.appendChild(startLink);
+
+    if (bookmark.endTime != null) {
+      const arrow = document.createElement('span');
+      arrow.className = 'ytm-arrow';
+      arrow.textContent = '→';
+      rangeDisplay.appendChild(arrow);
+
+      const endLink = document.createElement('button');
+      endLink.type = 'button';
+      endLink.className = 'ytm-time-link';
+      endLink.title = 'Play from end';
+      endLink.textContent = YTM_Youtube.formatTime(bookmark.endTime);
+      endLink.addEventListener('click', () => actions.onPlayFrom(bookmark, 'end'));
+      rangeDisplay.appendChild(endLink);
+
+      rangeDisplay.title = YTM_Bookmarks.durationLabel(bookmark);
+    }
 
     const rangeInput = document.createElement('input');
     rangeInput.type = 'text';
@@ -32,6 +56,7 @@ const YTM_Row = {
     rangeInput.value = YTM_Bookmarks.formatRangeText(bookmark);
     rangeInput.spellcheck = false;
     rangeInput.placeholder = '1:10 or 1:10-2:00';
+    rangeInput.hidden = true;
 
     const notesInput = document.createElement('input');
     notesInput.type = 'text';
@@ -42,25 +67,13 @@ const YTM_Row = {
     const originalRange = rangeInput.value;
     const originalNotes = notesInput.value;
 
-    function updateRangeTooltip() {
-      const parsed = YTM_Bookmarks.parseRangeText(rangeInput.value);
-      rangeInput.title =
-        parsed && parsed.end != null
-          ? YTM_Bookmarks.durationLabel({ startTime: parsed.start, endTime: parsed.end })
-          : '';
-    }
-    updateRangeTooltip();
-
     function updateDirtyState() {
       const dirty = rangeInput.value !== originalRange || notesInput.value !== originalNotes;
       saveBtn.classList.toggle('dirty', dirty);
       rangeInput.classList.toggle('dirty', dirty);
       notesInput.classList.toggle('dirty', dirty);
     }
-    rangeInput.addEventListener('input', () => {
-      updateRangeTooltip();
-      updateDirtyState();
-    });
+    rangeInput.addEventListener('input', updateDirtyState);
     notesInput.addEventListener('input', updateDirtyState);
 
     const msg = document.createElement('div');
@@ -99,6 +112,22 @@ const YTM_Row = {
       showResult(await actions.onMarkEnd(bookmark));
     });
 
+    let editing = false;
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'ytm-icon-btn';
+    editBtn.title = 'Edit time range';
+    editBtn.textContent = '✏️';
+    editBtn.addEventListener('click', () => {
+      editing = !editing;
+      rangeDisplay.hidden = editing;
+      rangeInput.hidden = !editing;
+      if (editing) {
+        rangeInput.focus();
+        rangeInput.select();
+      }
+    });
+
     const saveBtn = document.createElement('button');
     saveBtn.type = 'button';
     saveBtn.className = 'ytm-icon-btn';
@@ -117,9 +146,70 @@ const YTM_Row = {
 
     const topRow = document.createElement('div');
     topRow.className = 'ytm-row-top';
-    topRow.append(star, playBtn, rangeInput, startBtn, endBtn, notesInput, saveBtn, deleteBtn);
+    topRow.append(
+      star,
+      rangeDisplay,
+      rangeInput,
+      startBtn,
+      endBtn,
+      notesInput,
+      editBtn,
+      saveBtn,
+      deleteBtn
+    );
 
     li.append(topRow, msg);
+    return li;
+  },
+
+  // Minimal row for the popup: video already shown once per group, so this
+  // is just the clickable start/end range, the label, and delete.
+  //
+  // actions: { onPlayFrom(bookmark, point), onDelete(bookmark) }
+  renderMinimal(bookmark, actions) {
+    const li = document.createElement('li');
+    li.className = 'ytm-row ytm-row-minimal';
+
+    const rangeDisplay = document.createElement('span');
+    rangeDisplay.className = 'ytm-range-display';
+
+    const startLink = document.createElement('button');
+    startLink.type = 'button';
+    startLink.className = 'ytm-time-link';
+    startLink.title = 'Play from start';
+    startLink.textContent = YTM_Youtube.formatTime(bookmark.startTime);
+    startLink.addEventListener('click', () => actions.onPlayFrom(bookmark, 'start'));
+    rangeDisplay.appendChild(startLink);
+
+    if (bookmark.endTime != null) {
+      const arrow = document.createElement('span');
+      arrow.className = 'ytm-arrow';
+      arrow.textContent = '→';
+      rangeDisplay.appendChild(arrow);
+
+      const endLink = document.createElement('button');
+      endLink.type = 'button';
+      endLink.className = 'ytm-time-link';
+      endLink.title = 'Play from end';
+      endLink.textContent = YTM_Youtube.formatTime(bookmark.endTime);
+      endLink.addEventListener('click', () => actions.onPlayFrom(bookmark, 'end'));
+      rangeDisplay.appendChild(endLink);
+
+      rangeDisplay.title = YTM_Bookmarks.durationLabel(bookmark);
+    }
+
+    const label = document.createElement('span');
+    label.className = 'ytm-label-text';
+    label.textContent = bookmark.notes || '';
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'ytm-icon-btn ytm-danger';
+    deleteBtn.title = 'Delete';
+    deleteBtn.textContent = '✕';
+    deleteBtn.addEventListener('click', () => actions.onDelete(bookmark));
+
+    li.append(rangeDisplay, label, deleteBtn);
     return li;
   }
 };

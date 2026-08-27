@@ -101,6 +101,20 @@
     video.addEventListener('timeupdate', playQueueHandler);
   }
 
+  // Plays from a specific point on a bookmark: 'start' chains into later
+  // bookmarks as usual; 'end' just seeks there and plays normally, since
+  // it isn't the start of any clip to chain from.
+  async function playFromPoint(bookmark, point) {
+    if (!video) return;
+    if (point === 'end' && bookmark.endTime != null) {
+      clearPlayQueue();
+      video.currentTime = bookmark.endTime;
+      video.play().catch(() => {});
+      return;
+    }
+    await playFromBookmark(bookmark);
+  }
+
   // On page load: a cross-tab "play this bookmark" request (from the popup)
   // takes priority; otherwise, if this video already has bookmarks, start
   // from the earliest one rather than wherever YouTube would normally begin.
@@ -113,7 +127,7 @@
       const clips = await getBookmarksForCurrentVideo();
       const bookmark = clips.find((b) => b.id === pending.bookmarkId);
       if (bookmark) {
-        await playFromBookmark(bookmark);
+        await playFromPoint(bookmark, pending.point || 'start');
         return;
       }
     }
@@ -166,9 +180,8 @@
       await refreshPanel();
       scheduleMarkerRender();
     },
-    onPlay: async (bookmark) => {
-      await playFromBookmark(bookmark);
-      return { ok: true };
+    onPlayFrom: async (bookmark, point) => {
+      await playFromPoint(bookmark, point);
     },
     onMarkStart: async (bookmark) => {
       const result = await YTM_Bookmarks.markStart(bookmark.id, video ? video.currentTime : null);
@@ -526,7 +539,7 @@
     if (!message || message.videoId !== currentVideoId || message.type !== 'ytm-play-from') return;
     getBookmarksForCurrentVideo().then((clips) => {
       const bookmark = clips.find((b) => b.id === message.bookmarkId);
-      if (bookmark) playFromBookmark(bookmark);
+      if (bookmark) playFromPoint(bookmark, message.point || 'start');
     });
   });
 

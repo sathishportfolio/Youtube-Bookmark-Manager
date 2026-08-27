@@ -135,6 +135,30 @@
   color: #ff4e45;
   border-color: #ff4e45;
 }
+.ytm-range-display {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.ytm-time-link {
+  border: none;
+  background: transparent;
+  color: var(--yt-spec-call-to-action, #3ea6ff);
+  padding: 2px 4px;
+  font: 12px/1 inherit;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.ytm-time-link:hover {
+  background: var(--yt-spec-badge-chip-background, rgba(128, 128, 128, 0.1));
+  border-radius: 4px;
+}
+.ytm-arrow {
+  color: var(--yt-spec-text-secondary, #909090);
+  font-size: 11px;
+}
 .ytm-range-input {
   width: 100px;
   border: 1px solid var(--yt-spec-10-percent-layer, rgba(128, 128, 128, 0.3));
