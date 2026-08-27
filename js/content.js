@@ -1,12 +1,15 @@
 (function () {
   const PANEL_ID = 'ytm-panel';
   const MARKER_LAYER_ID = 'ytm-marker-layer';
+  const TOOLTIP_ID = 'ytm-tooltip';
 
   let currentVideoId = null;
   let video = null;
   let observer = null;
   let markerRenderScheduled = false;
   let presenceCheckScheduled = false;
+  let rangeStopHandler = null;
+  let rawEditorOpen = false;
 
   function getVideoEl() {
     return document.querySelector('video.html5-main-video');
@@ -20,14 +23,14 @@
       document.querySelector('link[itemprop="name"]')?.content ||
       document.querySelector('ytd-channel-name#channel-name a')?.textContent?.trim() ||
       '';
-    return { title, channel };
+    return { videoId: currentVideoId, title, channel };
   }
 
   async function getBookmarksForCurrentVideo() {
     const all = await YTM_Storage.getBookmarks();
-    return Object.values(all)
-      .filter((b) => b.videoId === currentVideoId)
-      .sort((a, b) => (a.startTime || 0) - (b.startTime || 0));
+    return YTM_Bookmarks.sortForDisplay(
+      Object.values(all).filter((b) => b.videoId === currentVideoId)
+    );
   }
 
   function findPending(clips) {
@@ -36,23 +39,51 @@
       .sort((a, b) => b.createdAt - a.createdAt)[0] || null;
   }
 
+  // --- playback -------------------------------------------------------
+
+  function clearRangeStop() {
+    if (rangeStopHandler) {
+      video.removeEventListener('timeupdate', rangeStopHandler);
+      rangeStopHandler = null;
+    }
+  }
+
+  function playRange(start, end) {
+    if (!video) return;
+    clearRangeStop();
+    video.currentTime = start;
+    video.play().catch(() => {});
+    if (end != null) {
+      rangeStopHandler = () => {
+        if (video.currentTime >= end) {
+          video.pause();
+          clearRangeStop();
+        }
+      };
+      video.addEventListener('timeupdate', rangeStopHandler);
+    }
+  }
+
+  async function applyPendingPlay() {
+    const pending = await YTM_Storage.getPendingPlay();
+    if (!pending || pending.videoId !== currentVideoId || !video) return;
+    await YTM_Storage.clearPendingPlay();
+
+    const prefs = await YTM_Storage.getPreferences();
+    video.currentTime = pending.start;
+    if (prefs.autoplay === false) {
+      video.pause();
+    } else {
+      playRange(pending.start, pending.end);
+    }
+  }
+
+  // --- bookmark actions -------------------------------------------------
+
   async function handleStart() {
     if (!video || !currentVideoId) return;
     const meta = readMetadata();
-    const now = Date.now();
-    const bookmark = {
-      id: `${currentVideoId}-${now}`,
-      videoId: currentVideoId,
-      url: `https://www.youtube.com/watch?v=${currentVideoId}`,
-      title: meta.title || 'Untitled video',
-      channel: meta.channel || '',
-      thumbnail: YTM_Youtube.thumbnailUrl(currentVideoId),
-      startTime: video.currentTime,
-      endTime: null,
-      notes: '',
-      createdAt: now,
-      updatedAt: now
-    };
+    const bookmark = YTM_Bookmarks.makeBookmark(meta, { start: video.currentTime });
     const all = await YTM_Storage.getBookmarks();
     all[bookmark.id] = bookmark;
     await YTM_Storage.saveBookmarks(all);
@@ -81,27 +112,49 @@
     scheduleMarkerRender();
   }
 
-  async function deleteClip(id) {
-    const all = await YTM_Storage.getBookmarks();
-    delete all[id];
-    await YTM_Storage.saveBookmarks(all);
-    await refreshPanel();
-    scheduleMarkerRender();
-  }
+  const rowActions = {
+    canMarkTime: true,
+    onToggleFavorite: async (bookmark) => {
+      await YTM_Bookmarks.toggleFavorite(bookmark.id);
+      await refreshPanel();
+      scheduleMarkerRender();
+    },
+    onPlay: async (bookmark) => {
+      playRange(bookmark.startTime, bookmark.endTime);
+      return { ok: true };
+    },
+    onMarkStart: async (bookmark) => {
+      const result = await YTM_Bookmarks.markStart(bookmark.id, video ? video.currentTime : null);
+      if (result.ok) {
+        await refreshPanel();
+        scheduleMarkerRender();
+      }
+      return result;
+    },
+    onMarkEnd: async (bookmark) => {
+      const result = await YTM_Bookmarks.markEnd(bookmark.id, video ? video.currentTime : null);
+      if (result.ok) {
+        await refreshPanel();
+        scheduleMarkerRender();
+      }
+      return result;
+    },
+    onSave: async (bookmark, rangeText, notesText) => {
+      const result = await YTM_Bookmarks.saveEdits(bookmark.id, rangeText, notesText);
+      if (result.ok) {
+        await refreshPanel();
+        scheduleMarkerRender();
+      }
+      return result;
+    },
+    onDelete: async (bookmark) => {
+      await YTM_Bookmarks.remove(bookmark.id);
+      await refreshPanel();
+      scheduleMarkerRender();
+    }
+  };
 
-  async function updateNotes(id, notes) {
-    const all = await YTM_Storage.getBookmarks();
-    if (!all[id]) return;
-    all[id].notes = notes;
-    all[id].updatedAt = Date.now();
-    await YTM_Storage.saveBookmarks(all);
-  }
-
-  function seekTo(seconds) {
-    if (!video) return;
-    video.currentTime = seconds;
-    video.play().catch(() => {});
-  }
+  // --- panel ------------------------------------------------------------
 
   function findTitleAnchor() {
     return (
@@ -121,68 +174,123 @@
     const panel = document.createElement('div');
     panel.id = PANEL_ID;
     panel.innerHTML = `
-      <div class="ytm-panel-actions">
-        <button type="button" class="ytm-btn ytm-btn-start">🔖 Bookmark start</button>
-        <button type="button" class="ytm-btn ytm-btn-end" disabled>🏁 Bookmark end</button>
-        <span class="ytm-hint"></span>
+      <div class="ytm-panel-header">
+        <div class="ytm-panel-actions">
+          <button type="button" class="ytm-btn ytm-btn-start">🔖 Bookmark start</button>
+          <button type="button" class="ytm-btn ytm-btn-end" disabled>🏁 Bookmark end</button>
+          <span class="ytm-hint"></span>
+        </div>
+        <div class="ytm-panel-toolbar">
+          <button type="button" class="ytm-btn ytm-btn-autoplay" title="Toggle autoplay on jump-to actions">Autoplay: On</button>
+          <button type="button" class="ytm-btn ytm-btn-raw" title="Bulk add/edit as text">Raw text</button>
+          <button type="button" class="ytm-btn ytm-btn-copy" title="Copy this video's bookmarks as text">Copy all</button>
+        </div>
+      </div>
+      <div class="ytm-add-row">
+        <input type="text" class="ytm-add-input" placeholder="Add: 1:10 or 1:10-2:00" spellcheck="false">
+        <button type="button" class="ytm-btn ytm-add-btn">Add</button>
+      </div>
+      <textarea class="ytm-raw-editor" spellcheck="false" hidden></textarea>
+      <div class="ytm-raw-actions" hidden>
+        <button type="button" class="ytm-btn ytm-raw-apply">Apply</button>
+        <button type="button" class="ytm-btn ytm-raw-cancel">Cancel</button>
       </div>
       <ul class="ytm-clip-list"></ul>
     `;
 
     panel.querySelector('.ytm-btn-start').addEventListener('click', handleStart);
     panel.querySelector('.ytm-btn-end').addEventListener('click', handleEnd);
+    panel.querySelector('.ytm-btn-autoplay').addEventListener('click', toggleAutoplay);
+    panel.querySelector('.ytm-btn-raw').addEventListener('click', toggleRawEditor);
+    panel.querySelector('.ytm-btn-copy').addEventListener('click', copyAllBookmarks);
+
+    const addInput = panel.querySelector('.ytm-add-input');
+    const addBtn = panel.querySelector('.ytm-add-btn');
+    const submitAdd = async () => {
+      const meta = readMetadata();
+      const result = await YTM_Bookmarks.addManual(meta, addInput.value, '');
+      if (result.ok) {
+        addInput.value = '';
+        await refreshPanel();
+        scheduleMarkerRender();
+      } else {
+        addInput.title = result.message;
+        addInput.classList.add('ytm-input-error');
+        setTimeout(() => addInput.classList.remove('ytm-input-error'), 1500);
+      }
+    };
+    addBtn.addEventListener('click', submitAdd);
+    addInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') submitAdd();
+    });
+
+    panel.querySelector('.ytm-raw-apply').addEventListener('click', applyRawEditor);
+    panel.querySelector('.ytm-raw-cancel').addEventListener('click', () => setRawEditorOpen(false));
 
     anchor.parentElement.insertBefore(panel, anchor);
     return panel;
   }
 
-  function renderClipRow(bookmark) {
-    const li = document.createElement('li');
-    li.className = 'ytm-clip';
+  async function toggleAutoplay() {
+    const prefs = await YTM_Storage.getPreferences();
+    const updated = { autoplay: prefs.autoplay === false, updatedAt: Date.now() };
+    await YTM_Storage.savePreferences(updated);
+    await refreshAutoplayButton();
+  }
 
-    const startBtn = document.createElement('button');
-    startBtn.type = 'button';
-    startBtn.className = 'ytm-time';
-    startBtn.textContent = YTM_Youtube.formatTime(bookmark.startTime);
-    startBtn.addEventListener('click', () => seekTo(bookmark.startTime));
-    li.appendChild(startBtn);
+  async function refreshAutoplayButton() {
+    const panel = document.getElementById(PANEL_ID);
+    if (!panel) return;
+    const prefs = await YTM_Storage.getPreferences();
+    const btn = panel.querySelector('.ytm-btn-autoplay');
+    if (btn) btn.textContent = `Autoplay: ${prefs.autoplay === false ? 'Off' : 'On'}`;
+  }
 
-    if (bookmark.endTime != null) {
-      const arrow = document.createElement('span');
-      arrow.className = 'ytm-arrow';
-      arrow.textContent = '→';
-      li.appendChild(arrow);
+  function setRawEditorOpen(open) {
+    rawEditorOpen = open;
+    const panel = document.getElementById(PANEL_ID);
+    if (!panel) return;
+    panel.querySelector('.ytm-raw-editor').hidden = !open;
+    panel.querySelector('.ytm-raw-actions').hidden = !open;
+    panel.querySelector('.ytm-add-row').hidden = open;
+    panel.querySelector('.ytm-clip-list').hidden = open;
+  }
 
-      const endBtn = document.createElement('button');
-      endBtn.type = 'button';
-      endBtn.className = 'ytm-time';
-      endBtn.textContent = YTM_Youtube.formatTime(bookmark.endTime);
-      endBtn.addEventListener('click', () => seekTo(bookmark.endTime));
-      li.appendChild(endBtn);
-    } else {
-      const pending = document.createElement('span');
-      pending.className = 'ytm-pending';
-      pending.textContent = 'no end set';
-      li.appendChild(pending);
+  async function toggleRawEditor() {
+    if (!rawEditorOpen) {
+      const clips = await getBookmarksForCurrentVideo();
+      const panel = document.getElementById(PANEL_ID);
+      panel.querySelector('.ytm-raw-editor').value = YTM_Bookmarks.exportRawText(clips);
     }
+    setRawEditorOpen(!rawEditorOpen);
+  }
 
-    const notes = document.createElement('input');
-    notes.type = 'text';
-    notes.className = 'ytm-notes';
-    notes.placeholder = 'Notes…';
-    notes.value = bookmark.notes || '';
-    notes.addEventListener('change', () => updateNotes(bookmark.id, notes.value));
-    li.appendChild(notes);
+  async function applyRawEditor() {
+    const panel = document.getElementById(PANEL_ID);
+    const text = panel.querySelector('.ytm-raw-editor').value;
+    await YTM_Bookmarks.applyRawText(readMetadata(), text);
+    setRawEditorOpen(false);
+    await refreshPanel();
+    scheduleMarkerRender();
+  }
 
-    const del = document.createElement('button');
-    del.type = 'button';
-    del.className = 'ytm-delete';
-    del.title = 'Delete';
-    del.textContent = '✕';
-    del.addEventListener('click', () => deleteClip(bookmark.id));
-    li.appendChild(del);
-
-    return li;
+  async function copyAllBookmarks() {
+    const clips = await getBookmarksForCurrentVideo();
+    const text = YTM_Bookmarks.exportRawText(clips);
+    try {
+      await navigator.clipboard.writeText(text);
+      const panel = document.getElementById(PANEL_ID);
+      const btn = panel?.querySelector('.ytm-btn-copy');
+      if (btn) {
+        const original = btn.textContent;
+        btn.textContent = 'Copied!';
+        setTimeout(() => {
+          btn.textContent = original;
+        }, 1200);
+      }
+    } catch {
+      // Clipboard write can fail without a user gesture context; ignore silently.
+    }
   }
 
   async function refreshPanel() {
@@ -199,12 +307,16 @@
       ? `Clip started at ${YTM_Youtube.formatTime(pending.startTime)} — click "Bookmark end" to finish it.`
       : '';
 
+    await refreshAutoplayButton();
+
     const list = panel.querySelector('.ytm-clip-list');
     list.innerHTML = '';
     for (const clip of clips) {
-      list.appendChild(renderClipRow(clip));
+      list.appendChild(YTM_Row.render(clip, rowActions));
     }
   }
+
+  // --- seek bar markers ---------------------------------------------------
 
   function ensureMarkerLayer() {
     const bar = document.querySelector('.ytp-progress-bar-container');
@@ -222,6 +334,41 @@
     return layer;
   }
 
+  function ensureTooltip() {
+    let tip = document.getElementById(TOOLTIP_ID);
+    if (!tip) {
+      tip = document.createElement('div');
+      tip.id = TOOLTIP_ID;
+      tip.className = 'ytm-tooltip';
+      tip.hidden = true;
+      document.body.appendChild(tip);
+    }
+    return tip;
+  }
+
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  function showTooltip(anchorEl, bookmark) {
+    const tip = ensureTooltip();
+    const range = YTM_Bookmarks.formatRangeText(bookmark);
+    tip.innerHTML = `<strong>${escapeHtml(range)}</strong>${
+      bookmark.notes ? `<br>${escapeHtml(bookmark.notes)}` : ''
+    }`;
+    const rect = anchorEl.getBoundingClientRect();
+    tip.style.left = `${rect.left + rect.width / 2}px`;
+    tip.style.top = `${rect.top}px`;
+    tip.hidden = false;
+  }
+
+  function hideTooltip() {
+    const tip = document.getElementById(TOOLTIP_ID);
+    if (tip) tip.hidden = true;
+  }
+
   async function renderMarkers() {
     const layer = ensureMarkerLayer();
     if (!layer || !video || !video.duration) return;
@@ -233,24 +380,23 @@
     for (const b of clips) {
       if (b.startTime == null) continue;
       const startPct = Math.min(100, (b.startTime / duration) * 100);
-      const startEl = document.createElement('div');
-      startEl.className = 'ytm-marker ytm-marker-start';
-      startEl.style.left = `${startPct}%`;
-      layer.appendChild(startEl);
+      const hasEnd = b.endTime != null;
+      const endPct = hasEnd ? Math.min(100, (b.endTime / duration) * 100) : startPct;
+      const widthPct = Math.max(hasEnd ? endPct - startPct : 0, 0);
 
-      if (b.endTime != null) {
-        const endPct = Math.min(100, (b.endTime / duration) * 100);
-        const endEl = document.createElement('div');
-        endEl.className = 'ytm-marker ytm-marker-end';
-        endEl.style.left = `${endPct}%`;
-        layer.appendChild(endEl);
+      const group = document.createElement('div');
+      group.className = 'ytm-marker-group' + (b.favorite ? ' favorite' : '') + (hasEnd ? '' : ' pending');
+      group.style.left = `${startPct}%`;
+      group.style.width = `${Math.max(widthPct, 0.4)}%`;
 
-        const range = document.createElement('div');
-        range.className = 'ytm-marker-range';
-        range.style.left = `${startPct}%`;
-        range.style.width = `${Math.max(0, endPct - startPct)}%`;
-        layer.appendChild(range);
-      }
+      group.addEventListener('mouseenter', () => showTooltip(group, b));
+      group.addEventListener('mouseleave', hideTooltip);
+      group.addEventListener('click', (e) => {
+        e.stopPropagation();
+        playRange(b.startTime, b.endTime);
+      });
+
+      layer.appendChild(group);
     }
   }
 
@@ -262,6 +408,8 @@
       renderMarkers();
     });
   }
+
+  // --- lifecycle ------------------------------------------------------
 
   function schedulePresenceCheck() {
     if (presenceCheckScheduled) return;
@@ -289,6 +437,7 @@
 
     refreshPanel();
     renderMarkers();
+    applyPendingPlay();
     video.addEventListener('loadedmetadata', renderMarkers);
 
     if (!observer) {
@@ -300,19 +449,28 @@
   function teardown() {
     document.getElementById(PANEL_ID)?.remove();
     document.getElementById(MARKER_LAYER_ID)?.remove();
-    if (video) video.removeEventListener('loadedmetadata', renderMarkers);
+    hideTooltip();
+    if (video) {
+      video.removeEventListener('loadedmetadata', renderMarkers);
+      clearRangeStop();
+    }
   }
 
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && changes.bookmarks) {
+    if (area !== 'local') return;
+    if (changes.bookmarks) {
       refreshPanel();
       scheduleMarkerRender();
     }
+    if (changes.preferences) refreshAutoplayButton();
   });
 
   chrome.runtime.onMessage.addListener((message) => {
-    if (message?.type === 'ytm-seek' && message.videoId === currentVideoId) {
-      seekTo(message.time);
+    if (!message || message.videoId !== currentVideoId) return;
+    if (message.type === 'ytm-seek') {
+      playRange(message.time, null);
+    } else if (message.type === 'ytm-play-range') {
+      playRange(message.start, message.end);
     }
   });
 

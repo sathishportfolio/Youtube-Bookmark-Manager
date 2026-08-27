@@ -17,10 +17,19 @@ to work from.
   right-click context menu items ("bookmark start here", and "bookmark end
   here" once a clip is pending an end time).
 - A video can have multiple bookmarked clips. Start/end times are shown as
-  markers directly on the YouTube seek bar.
-- Popup groups clips by video; each clip has editable notes, single-click
-  delete, and clicking a timestamp resumes playback from that point (in an
-  existing tab if the video is already open, otherwise a new tab).
+  dominant, hoverable markers directly on the YouTube seek bar (tooltip with
+  time range + notes; click to play that range).
+- Every clip row (panel and popup share the same component, `js/row.js`)
+  has: favorite toggle, play-this-range, an editable timestamp field
+  (`1:10` / `1:10-2:00`), mark-start/mark-end from current playback (blocks
+  duplicate start times), notes, explicit save, and delete.
+- Per video: a manual add-by-typed-time row, a raw-text bulk editor, and a
+  "copy all as text" export — see `js/bookmarks.js` for the parsing/format
+  and mutation logic shared by both surfaces.
+- Autoplay is a global preference synced through the Gist alongside
+  bookmarks (see the combined `{bookmarks, preferences}` payload in
+  `js/gist.js`); it only gates the "open a bookmark in a new tab" flow —
+  playback in an already-open tab always plays immediately.
 - Sync bookmarks to a GitHub Gist:
   - Gist content is the source of truth; local storage is a cache.
   - Push local changes to the Gist, pull remote changes into local storage.

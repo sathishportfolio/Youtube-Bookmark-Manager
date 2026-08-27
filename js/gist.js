@@ -22,41 +22,44 @@ const YTM_Gist = {
     return this.request('/user', token);
   },
 
-  async createGist(token, bookmarks) {
+  async createGist(token, data) {
     const gist = await this.request('/gists', token, {
       method: 'POST',
       body: JSON.stringify({
         description: 'YouTube Manager bookmarks (managed by the YouTube Manager browser extension)',
         public: false,
-        files: { [this.FILE_NAME]: { content: JSON.stringify(bookmarks, null, 2) } }
+        files: { [this.FILE_NAME]: { content: JSON.stringify(data, null, 2) } }
       })
     });
     return gist.id;
   },
 
-  async fetchBookmarks(token, gistId) {
+  // Returns { bookmarks, preferences } — the gist file holds both so
+  // preferences like Autoplay follow the user across devices too.
+  async fetchData(token, gistId) {
     const gist = await this.request(`/gists/${gistId}`, token);
     const file = gist.files[this.FILE_NAME];
-    if (!file) return {};
+    if (!file) return { bookmarks: {}, preferences: {} };
     const content = file.truncated ? await (await fetch(file.raw_url)).text() : file.content;
     try {
-      return JSON.parse(content);
+      const data = JSON.parse(content);
+      return { bookmarks: data.bookmarks || {}, preferences: data.preferences || {} };
     } catch {
-      return {};
+      return { bookmarks: {}, preferences: {} };
     }
   },
 
-  async pushBookmarks(token, gistId, bookmarks) {
+  async pushData(token, gistId, data) {
     await this.request(`/gists/${gistId}`, token, {
       method: 'PATCH',
       body: JSON.stringify({
-        files: { [this.FILE_NAME]: { content: JSON.stringify(bookmarks, null, 2) } }
+        files: { [this.FILE_NAME]: { content: JSON.stringify(data, null, 2) } }
       })
     });
   },
 
   // Last-write-wins merge keyed by each bookmark's updatedAt timestamp.
-  merge(local, remote) {
+  mergeBookmarks(local, remote) {
     const merged = { ...remote };
     for (const [id, bookmark] of Object.entries(local)) {
       const existing = merged[id];
@@ -65,5 +68,10 @@ const YTM_Gist = {
       }
     }
     return merged;
+  },
+
+  mergePreferences(local, remote) {
+    if (!remote || (local?.updatedAt || 0) >= (remote.updatedAt || 0)) return local;
+    return remote;
   }
 };

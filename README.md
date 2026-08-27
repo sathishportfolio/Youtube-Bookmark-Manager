@@ -10,26 +10,39 @@ third-party account required beyond GitHub.
 
 ## Features
 
-- **Bookmark start/end points** — a small panel appears above the video
-  title on every watch page with **Bookmark start** and **Bookmark end**
-  buttons for marking a clip, plus the clip list for that video right there.
+- **Bookmark start/end points** — a panel above the video title has
+  **Bookmark start** / **Bookmark end** buttons, plus the full clip list for
+  that video right there. Seek-bar markers highlight every clip's range —
+  hover for a tooltip (time range + notes), click to play that range.
 - **Multiple clips per video** — bookmark as many moments in the same video
   as you like; each one is tracked separately.
-- **Seek bar markers** — start/end points are highlighted directly on the
-  YouTube progress bar while you watch.
+- **Full row controls**, in both the panel and the popup, for every clip:
+  - ★ **Favorite** toggle
+  - ▶ **Play** — plays just that clip's range, pausing automatically at its
+    end
+  - An editable **timestamp field** (`1:10` or `1:10-2:00`) alongside **Mark
+    start** / **Mark end** icons that capture the current playback position
+    (marking a start identical to another clip's is blocked)
+  - An editable **notes** field
+  - 💾 **Save** applies the timestamp/notes edits; **✕ Delete** removes the
+    clip immediately
+- **Manual add row** — type a time or range directly (`1:10` or
+  `1:10-2:00`) to add a clip without touching playback.
+- **Raw text editor** — bulk add/edit a video's clips as plain text
+  (`* 1:10-2:00 notes`, one per line; a leading `*` marks it a favorite).
+- **Copy all** — export a video's clips as that same raw text, to your
+  clipboard.
+- **Autoplay toggle** — a global, Gist-synced preference. With it off,
+  opening a bookmark in a new tab seeks to that point without auto-playing;
+  clips opened in an already-open tab always play immediately.
 - **Quick actions from anywhere** — right-click any YouTube page or video
-  link and choose *"YouTube Manager: bookmark start here"* to save the
-  current playback position without opening the popup. Once a clip has a
-  start but no end, a second option — *"bookmark end here"* — appears in the
-  same menu.
-- **Notes and cleanup** — add notes to any saved clip, delete clips with a
-  single click.
-- **Resume playback** — click any timestamp in the popup to jump straight to
-  that point, in an existing tab if the video's already open, or a new tab
-  otherwise.
-- **Gist sync** — push and pull your bookmarks to a private GitHub Gist so
-  they follow you across machines and browsers. Sync uses a simple
-  last-write-wins merge, so it's safe to use on more than one device.
+  link and choose *"bookmark start here"* to save the current playback
+  position without opening the popup or panel. Once a clip has a start but
+  no end, *"bookmark end here"* appears in the same menu.
+- **Gist sync** — push and pull your bookmarks (and the Autoplay
+  preference) to a private GitHub Gist so they follow you across machines
+  and browsers. Sync uses a simple last-write-wins merge, so it's safe to
+  use on more than one device.
 - **No backend, no tracking** — the extension talks directly to
   `api.github.com`; there is no intermediary server and nothing is sent
   anywhere else.
@@ -40,7 +53,7 @@ third-party account required beyond GitHub.
 |---|---|
 | Platform | Chrome / Edge / Brave (Chromium, Manifest V3) |
 | Language | Vanilla JavaScript, HTML, CSS — no build step, no dependencies |
-| Storage | `chrome.storage.local` (bookmarks cache, settings, token) |
+| Storage | `chrome.storage.local` (bookmarks, local settings/token, Gist-synced preferences, pending cross-tab play) |
 | Sync backend | [GitHub Gist API](https://docs.github.com/en/rest/gists) — one JSON file per gist |
 | Permissions | `storage`, `activeTab`, `scripting`, `contextMenus`, `tabs` |
 | Host permissions | `https://api.github.com/*`, `*://*.youtube.com/*` |
@@ -52,15 +65,17 @@ third-party account required beyond GitHub.
 manifest.json          Extension manifest (MV3)
 popup.html/.css        Toolbar popup UI (grouped bookmark list)
 options.html/.css      Settings page (Gist token + Gist ID)
-content.css             Styles for the in-page bookmark icon and seek-bar markers
+content.css             Styles for the in-page panel and seek-bar markers
 js/
-  storage.js            chrome.storage.local wrapper
+  storage.js            chrome.storage.local wrapper (bookmarks, settings, preferences, pending-play)
   gist.js               GitHub Gist API client + merge logic
   youtube.js             Video ID extraction, thumbnail/time helpers, page metadata scraping
-  content.js              Injected into YouTube watch pages: bookmark panel, start/end capture, seek-bar markers, resume messaging
-  background.js           Service worker: right-click "quick start" bookmark
-  popup.js                 Popup UI logic
-  options.js                Settings page logic
+  bookmarks.js            Shared bookmark logic: time/raw-text parsing, favorite/mark/save/delete mutations
+  row.js                  Shared bookmark-row UI component (used by both the panel and the popup)
+  content.js               Injected into YouTube watch pages: bookmark panel, seek-bar markers, resume/play messaging
+  background.js            Service worker: right-click "quick start"/"quick end" bookmark actions
+  popup.js                  Popup UI logic
+  options.js                 Settings page logic
 ```
 
 ### Data model
@@ -69,7 +84,7 @@ Each bookmark is one clip within a video:
 
 ```json
 {
-  "id": "dQw4w9WgXcQ-1735353600000",
+  "id": "dQw4w9WgXcQ-1735353600000-42",
   "videoId": "dQw4w9WgXcQ",
   "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
   "title": "Video title",
@@ -78,15 +93,41 @@ Each bookmark is one clip within a video:
   "startTime": 42.5,
   "endTime": 97.1,
   "notes": "",
+  "favorite": false,
   "createdAt": 1735353600000,
   "updatedAt": 1735353600000
 }
 ```
 
 `endTime` is `null` until you set it — a video can have several bookmarks
-(clips) at once, some still pending an end point. The full bookmark set
-syncs as a single JSON file (`youtube-manager-bookmarks.json`) inside a
-private Gist.
+(clips) at once, some still pending an end point.
+
+The synced Gist file holds both the bookmark map and Gist-synced
+preferences (currently just Autoplay):
+
+```json
+{
+  "bookmarks": { "dQw4w9WgXcQ-...": { "...": "..." } },
+  "preferences": { "autoplay": true, "updatedAt": 1735353600000 }
+}
+```
+
+This is stored as a single JSON file (`youtube-manager-bookmarks.json`)
+inside a private Gist. The GitHub token and Gist ID themselves are **not**
+synced — they stay local to each browser (see Security & privacy below).
+
+### Raw text format
+
+Used by the Raw text editor and Copy all — one line per clip:
+
+```
+* 1:10-2:00 Great explanation of this part
+1:15 Single-timestamp bookmark, no end set
+2:30-2:45
+```
+
+A leading `*` marks the clip a favorite. After the (optional) time or
+`start-end` range, the rest of the line is the notes field.
 
 ## Install
 
@@ -101,23 +142,27 @@ This extension isn't on the Chrome Web Store yet — install it unpacked:
 ## Usage
 
 1. Navigate to and open any video you want to save.
-2. Wait for the video to play, then use the bookmark panel that appears
-   above the video title.
+2. Wait for the video to play, then use the bookmark panel above the video
+   title (the same controls are also available per-video in the popup).
 3. Click **Bookmark start** to add the video to your list at the current
    time.
-4. Keep watching, then click **Bookmark end** (in the same panel, or via the
-   right-click menu) to set the end time for that clip.
-5. Bookmarked start and end times are highlighted directly on the YouTube
-   seek bar.
-6. Add notes to saved bookmarks or delete them with a single click — either
-   in the panel or in the extension popup.
-7. Click any timestamp — in the panel or in the popup — to resume watching
-   from that point.
+4. Keep watching, then click **Bookmark end** (or the row's own **Mark
+   end** icon) to set the end time for that clip.
+5. Clips are highlighted directly on the YouTube seek bar — hover a marker
+   for its time range and notes, click it to play that range.
+6. On any clip row: ★ favorite it, ▶ play its range, edit the timestamp
+   field or notes and click 💾 to save, or click ✕ to delete it.
+7. Use the **Add** row to add a clip by typed time (`1:10` or `1:10-2:00`)
+   without touching playback, or **Raw text** to bulk add/edit a video's
+   clips as plain text. **Copy all** copies that video's clips as the same
+   text format.
+8. Toggle **Autoplay** (synced across your devices) to control whether
+   opening a bookmark in a new tab auto-plays or just seeks to that point.
 
-Right-clicking a YouTube page or video link offers the same two steps
-without opening the panel: *"bookmark start here"* always shows up, and
-*"bookmark end here"* appears once that video has a clip waiting for an end
-time.
+Right-clicking a YouTube page or video link offers a shortcut for the first
+two steps without opening the panel: *"bookmark start here"* always shows
+up, and *"bookmark end here"* appears once that video has a clip waiting
+for an end time.
 
 ### Set up Gist sync
 

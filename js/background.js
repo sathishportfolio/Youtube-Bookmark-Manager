@@ -1,4 +1,4 @@
-importScripts('storage.js', 'youtube.js');
+importScripts('storage.js', 'youtube.js', 'bookmarks.js');
 
 const START_MENU_ID = 'ytm-quick-start';
 const END_MENU_ID = 'ytm-quick-end';
@@ -52,21 +52,10 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
 
 async function quickStart(videoId, tabId) {
   const meta = await YTM_Youtube.readPageMetadata(tabId);
-  const now = Date.now();
-  const bookmark = {
-    id: `${videoId}-${now}`,
-    videoId,
-    url: `https://www.youtube.com/watch?v=${videoId}`,
-    title: meta.title || 'Untitled video',
-    channel: meta.channel || '',
-    thumbnail: YTM_Youtube.thumbnailUrl(videoId),
-    startTime: meta.currentTime || 0,
-    endTime: null,
-    notes: '',
-    createdAt: now,
-    updatedAt: now
-  };
-
+  const bookmark = YTM_Bookmarks.makeBookmark(
+    { videoId, title: meta.title, channel: meta.channel },
+    { start: meta.currentTime || 0 }
+  );
   const bookmarks = await YTM_Storage.getBookmarks();
   bookmarks[bookmark.id] = bookmark;
   await YTM_Storage.saveBookmarks(bookmarks);
@@ -80,16 +69,7 @@ async function quickEnd(videoId, tabId) {
   if (!pending) return;
 
   const meta = await YTM_Youtube.readPageMetadata(tabId);
-  let end = meta.currentTime || 0;
-  if (end < pending.startTime) {
-    const tmp = pending.startTime;
-    pending.startTime = end;
-    end = tmp;
-  }
-  pending.endTime = end;
-  pending.updatedAt = Date.now();
-  bookmarks[pending.id] = pending;
-  await YTM_Storage.saveBookmarks(bookmarks);
+  await YTM_Bookmarks.markEnd(pending.id, meta.currentTime || 0);
 }
 
 function flashBadge() {
