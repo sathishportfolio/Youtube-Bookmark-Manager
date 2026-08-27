@@ -303,10 +303,14 @@
     rawEditorOpen = open;
     const panel = document.getElementById(PANEL_ID);
     if (!panel) return;
-    panel.querySelector('.ytm-raw-editor').hidden = !open;
-    panel.querySelector('.ytm-raw-actions').hidden = !open;
-    panel.querySelector('.ytm-add-row').hidden = open;
-    panel.querySelector('.ytm-clip-list').hidden = open;
+    const editor = panel.querySelector('.ytm-raw-editor');
+    const actions = panel.querySelector('.ytm-raw-actions');
+    const addRow = panel.querySelector('.ytm-add-row');
+    const clipList = panel.querySelector('.ytm-clip-list');
+    if (editor) editor.hidden = !open;
+    if (actions) actions.hidden = !open;
+    if (addRow) addRow.hidden = open;
+    if (clipList) clipList.hidden = open;
   }
 
   async function toggleRawEditor() {

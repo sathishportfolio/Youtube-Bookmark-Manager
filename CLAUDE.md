@@ -19,10 +19,16 @@ to work from.
 - A video can have multiple bookmarked clips. Start/end times are shown as
   dominant, hoverable markers directly on the YouTube seek bar (tooltip with
   time range + notes; click to play that range).
-- Every clip row (panel and popup share the same component, `js/row.js`)
-  has: favorite toggle, play-this-range, an editable timestamp field
-  (`1:10` / `1:10-2:00`), mark-start/mark-end from current playback (blocks
-  duplicate start times), notes, explicit save, and delete.
+- Every clip row (panel, popup, and Library page all share the same
+  component, `js/row.js`) has: favorite toggle (display order is always
+  chronological — favoriting never reorders), play-from-here, an editable
+  timestamp field (`1:10` / `1:10-2:00`, hover for duration), ⏮/⏭
+  mark-start/mark-end from current playback (blocks duplicate start times),
+  a label field, explicit save (unsaved edits highlight until saved), and
+  delete.
+- `manage.html` is a full-tab "Library" page reusing `popup.js`/`popup.css`
+  verbatim (same element IDs) with `manage.css` only widening the layout —
+  opened via the popup's Library button or the Settings page link.
 - Per video: a manual add-by-typed-time row, a raw-text bulk editor, and a
   "copy all as text" export — see `js/bookmarks.js` for the parsing/format
   and mutation logic shared by both surfaces.

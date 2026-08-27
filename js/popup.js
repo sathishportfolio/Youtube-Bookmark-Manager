@@ -319,4 +319,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('syncBtn').addEventListener('click', syncNow);
   document.getElementById('optionsBtn').addEventListener('click', () => chrome.runtime.openOptionsPage());
   document.getElementById('searchInput').addEventListener('input', renderList);
+  document.getElementById('manageBtn')?.addEventListener('click', () => {
+    chrome.tabs.create({ url: chrome.runtime.getURL('manage.html') });
+  });
 });

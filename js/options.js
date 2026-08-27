@@ -53,4 +53,8 @@ document.addEventListener('DOMContentLoaded', () => {
   load();
   document.getElementById('saveBtn').addEventListener('click', save);
   document.getElementById('testBtn').addEventListener('click', test);
+  document.getElementById('libraryLink').addEventListener('click', (e) => {
+    e.preventDefault();
+    chrome.tabs.create({ url: chrome.runtime.getURL('manage.html') });
+  });
 });

@@ -103,11 +103,6 @@
   gap: 6px;
   flex-wrap: wrap;
 }
-.ytm-duration {
-  color: var(--yt-spec-text-secondary, #909090);
-  font-size: 11px;
-  white-space: nowrap;
-}
 .ytm-icon-btn {
   border: 1px solid var(--yt-spec-10-percent-layer, rgba(128, 128, 128, 0.3));
   background: transparent;
@@ -126,10 +121,15 @@
 }
 .ytm-star {
   color: var(--yt-spec-text-secondary, #909090);
-  border-color: transparent;
 }
 .ytm-star.active {
   color: #f5b400;
+}
+.ytm-icon-btn.dirty,
+.ytm-range-input.dirty,
+.ytm-notes-input.dirty {
+  border-color: #f5b400;
+  box-shadow: 0 0 0 1px #f5b400;
 }
 .ytm-danger:hover {
   color: #ff4e45;

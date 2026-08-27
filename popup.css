@@ -108,8 +108,14 @@ button.danger { color: #dc2626; border-color: #dc2626; }
 }
 .ytm-icon-btn:hover { background: rgba(128, 128, 128, 0.1); }
 .ytm-icon-btn:disabled { opacity: 0.4; cursor: default; }
-.ytm-star { color: var(--muted); border-color: transparent; }
+.ytm-star { color: var(--muted); }
 .ytm-star.active { color: #f5b400; }
+.ytm-icon-btn.dirty,
+.ytm-range-input.dirty,
+.ytm-notes-input.dirty {
+  border-color: #f5b400;
+  box-shadow: 0 0 0 1px #f5b400;
+}
 .ytm-danger:hover { color: #dc2626; border-color: #dc2626; }
 .ytm-range-input {
   width: 92px;
@@ -121,7 +127,6 @@ button.danger { color: #dc2626; border-color: #dc2626; }
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
-.ytm-duration { color: var(--muted); font-size: 11px; white-space: nowrap; }
 .ytm-notes-input {
   flex: 1 1 90px;
   min-width: 60px;

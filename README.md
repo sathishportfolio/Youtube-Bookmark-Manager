@@ -16,19 +16,20 @@ third-party account required beyond GitHub.
   hover for a tooltip (time range + notes), click to play that range.
 - **Multiple clips per video** — bookmark as many moments in the same video
   as you like; each one is tracked separately.
-- **Full row controls**, in both the panel and the popup, for every clip, in
-  one line:
-  - ★ **Favorite** toggle
+- **Full row controls**, in the panel, popup, and Library page alike, for
+  every clip, in one line:
+  - ★ **Favorite** toggle (marks a clip — never reorders the list, which
+    always stays in timestamp order)
   - ▶ **Play from here** — see below for what "play" actually does
-  - An editable **timestamp field** (`1:10` or `1:10-2:00`) and, right after
-    it, the clip's **duration** shown for reference (`30sec`, `2min`,
-    `1hr`)
-  - **⏺ Mark start** / **⏹ Mark end** icons that capture the current
+  - An editable **timestamp field** (`1:10` or `1:10-2:00`) — hover it to
+    see the clip's duration (`30sec`, `2min`, `1hr`)
+  - **⏮ Mark start** / **⏭ Mark end** icons that capture the current
     playback position (marking a start identical to another clip's is
     blocked)
   - An editable **label** field (short text, not long-form notes)
   - 💾 **Save** applies the timestamp/label edits; **✕ Delete** removes the
-    clip immediately
+    clip immediately. Unsaved edits highlight the field and Save button
+    until you save them.
 - **Chained playback** — clicking ▶ Play (or a seek-bar marker) plays that
   clip and, if the video has more bookmarks after it, keeps going: at each
   clip's end it jumps straight to the next bookmark's start rather than
@@ -51,6 +52,10 @@ third-party account required beyond GitHub.
   link and choose *"bookmark start here"* to save the current playback
   position without opening the popup or panel. Once a clip has a start but
   no end, *"bookmark end here"* appears in the same menu.
+- **Library page** — a full browser tab (not popup-width-constrained) for
+  managing every bookmarked video at once, with the same row controls,
+  search, add row, raw-text editor, and Copy all as the popup. Open it from
+  the popup's **📚 Library** button or the link on the Settings page.
 - **Gist sync** — push and pull your bookmarks (and the Autoplay
   preference) to a private GitHub Gist so they follow you across machines
   and browsers. Sync uses a simple last-write-wins merge, so it's safe to
@@ -76,6 +81,7 @@ third-party account required beyond GitHub.
 ```
 manifest.json          Extension manifest (MV3)
 popup.html/.css        Toolbar popup UI (grouped bookmark list)
+manage.html/.css        Library page — same UI as the popup, full browser tab
 options.html/.css      Settings page (Gist token + Gist ID)
 content.css             Styles for the in-page panel and seek-bar markers
 js/
@@ -86,7 +92,7 @@ js/
   row.js                  Shared bookmark-row UI component (used by both the panel and the popup)
   content.js               Injected into YouTube watch pages: bookmark panel, seek-bar markers, resume/play messaging
   background.js            Service worker: right-click "quick start"/"quick end" bookmark actions
-  popup.js                  Popup UI logic
+  popup.js                  Popup UI logic (also drives manage.html's Library page)
   options.js                 Settings page logic
 ```
 
