@@ -76,11 +76,10 @@ const YTM_Bookmarks = {
       .join('\n');
   },
 
+  // Display order is always chronological — favoriting a clip marks it,
+  // it doesn't move it.
   sortForDisplay(clips) {
-    return clips.slice().sort((a, b) => {
-      if (!!b.favorite !== !!a.favorite) return b.favorite ? 1 : -1;
-      return (a.startTime || 0) - (b.startTime || 0);
-    });
+    return clips.slice().sort((a, b) => (a.startTime || 0) - (b.startTime || 0));
   },
 
   makeBookmark(videoMeta, { start, end = null, notes = '', favorite = false }) {
