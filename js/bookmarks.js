@@ -33,6 +33,24 @@ const YTM_Bookmarks = {
     return `${start}-${YTM_Youtube.formatTime(bookmark.endTime)}`;
   },
 
+  // Human-friendly clip duration for info display, e.g. "30sec", "2min", "1hr".
+  durationLabel(bookmark) {
+    if (bookmark.startTime == null || bookmark.endTime == null) return '';
+    const total = Math.max(0, Math.round(bookmark.endTime - bookmark.startTime));
+    if (total < 60) return `${total}sec`;
+    const minutes = Math.round(total / 60);
+    if (minutes < 60) return `${minutes}min`;
+    const hours = Math.round(minutes / 60);
+    return `${hours}hr`;
+  },
+
+  sortByStart(clips) {
+    return clips
+      .filter((b) => b.startTime != null)
+      .slice()
+      .sort((a, b) => a.startTime - b.startTime);
+  },
+
   parseRawLine(line) {
     const favMatch = line.match(/^\*\s*/);
     const favorite = !!favMatch;

@@ -16,20 +16,30 @@ third-party account required beyond GitHub.
   hover for a tooltip (time range + notes), click to play that range.
 - **Multiple clips per video** — bookmark as many moments in the same video
   as you like; each one is tracked separately.
-- **Full row controls**, in both the panel and the popup, for every clip:
+- **Full row controls**, in both the panel and the popup, for every clip, in
+  one line:
   - ★ **Favorite** toggle
-  - ▶ **Play** — plays just that clip's range, pausing automatically at its
-    end
-  - An editable **timestamp field** (`1:10` or `1:10-2:00`) alongside **Mark
-    start** / **Mark end** icons that capture the current playback position
-    (marking a start identical to another clip's is blocked)
-  - An editable **notes** field
-  - 💾 **Save** applies the timestamp/notes edits; **✕ Delete** removes the
+  - ▶ **Play from here** — see below for what "play" actually does
+  - An editable **timestamp field** (`1:10` or `1:10-2:00`) and, right after
+    it, the clip's **duration** shown for reference (`30sec`, `2min`,
+    `1hr`)
+  - **⏺ Mark start** / **⏹ Mark end** icons that capture the current
+    playback position (marking a start identical to another clip's is
+    blocked)
+  - An editable **label** field (short text, not long-form notes)
+  - 💾 **Save** applies the timestamp/label edits; **✕ Delete** removes the
     clip immediately
-- **Manual add row** — type a time or range directly (`1:10` or
-  `1:10-2:00`) to add a clip without touching playback.
+- **Chained playback** — clicking ▶ Play (or a seek-bar marker) plays that
+  clip and, if the video has more bookmarks after it, keeps going: at each
+  clip's end it jumps straight to the next bookmark's start rather than
+  stopping, skipping the untagged gap between them. It only pauses at a
+  clip's end if that clip is the *last* bookmark for the video; a clip left
+  with no end time is never a jump point, so playback just continues
+  through it normally (finishing the video, if it's the last one).
+- **Manual add row** — separate timestamp (`1:10` or `1:10-2:00`) and label
+  fields to add a clip without touching playback.
 - **Raw text editor** — bulk add/edit a video's clips as plain text
-  (`* 1:10-2:00 notes`, one per line; a leading `*` marks it a favorite).
+  (`* 1:10-2:00 label`, one per line; a leading `*` marks it a favorite).
 - **Copy all** — export a video's clips as that same raw text, to your
   clipboard.
 - **Autoplay toggle** — a global, Gist-synced preference. With it off,
@@ -127,7 +137,8 @@ Used by the Raw text editor and Copy all — one line per clip:
 ```
 
 A leading `*` marks the clip a favorite. After the (optional) time or
-`start-end` range, the rest of the line is the notes field.
+`start-end` range, the rest of the line is the label (stored internally as
+each bookmark's `notes` field).
 
 ## Install
 
@@ -150,12 +161,13 @@ This extension isn't on the Chrome Web Store yet — install it unpacked:
    end** icon) to set the end time for that clip.
 5. Clips are highlighted directly on the YouTube seek bar — hover a marker
    for its time range and notes, click it to play that range.
-6. On any clip row: ★ favorite it, ▶ play its range, edit the timestamp
-   field or notes and click 💾 to save, or click ✕ to delete it.
-7. Use the **Add** row to add a clip by typed time (`1:10` or `1:10-2:00`)
-   without touching playback, or **Raw text** to bulk add/edit a video's
-   clips as plain text. **Copy all** copies that video's clips as the same
-   text format.
+6. On any clip row: ★ favorite it, ▶ play from it (continuing into later
+   bookmarks — see Features above), edit the timestamp field or label and
+   click 💾 to save, or click ✕ to delete it.
+7. Use the **Add** row's timestamp and label fields to add a clip without
+   touching playback, or **Raw text** to bulk add/edit a video's clips as
+   plain text. **Copy all** copies that video's clips as the same text
+   format.
 8. Toggle **Autoplay** (synced across your devices) to control whether
    opening a bookmark in a new tab auto-plays or just seeks to that point.
 

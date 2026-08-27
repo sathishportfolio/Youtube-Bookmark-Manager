@@ -45,19 +45,17 @@ async function getCurrentTimeForTab(tabId) {
   }
 }
 
-async function jumpToRange(bookmark, start, end) {
+async function jumpToBookmark(bookmark) {
   const tab = await findTabForVideo(bookmark.videoId);
   if (tab) {
-    const message =
-      end != null
-        ? { type: 'ytm-play-range', videoId: bookmark.videoId, start, end }
-        : { type: 'ytm-seek', videoId: bookmark.videoId, time: start };
-    await chrome.tabs.sendMessage(tab.id, message).catch(() => {});
+    await chrome.tabs
+      .sendMessage(tab.id, { type: 'ytm-play-from', videoId: bookmark.videoId, bookmarkId: bookmark.id })
+      .catch(() => {});
     await chrome.tabs.update(tab.id, { active: true });
     await chrome.windows.update(tab.windowId, { focused: true });
   } else {
-    await YTM_Storage.setPendingPlay({ videoId: bookmark.videoId, start, end });
-    await chrome.tabs.create({ url: `${bookmark.url}&t=${Math.floor(start)}s` });
+    await YTM_Storage.setPendingPlay({ videoId: bookmark.videoId, bookmarkId: bookmark.id });
+    await chrome.tabs.create({ url: `${bookmark.url}&t=${Math.floor(bookmark.startTime)}s` });
   }
 }
 
@@ -68,8 +66,14 @@ function buildAddRow(videoMeta) {
   const input = document.createElement('input');
   input.type = 'text';
   input.className = 'ytm-add-input';
-  input.placeholder = 'Add: 1:10 or 1:10-2:00';
+  input.placeholder = '1:10 or 1:10-2:00';
   input.spellcheck = false;
+
+  const labelInput = document.createElement('input');
+  labelInput.type = 'text';
+  labelInput.className = 'ytm-add-label-input';
+  labelInput.placeholder = 'Label';
+  labelInput.spellcheck = false;
 
   const addBtn = document.createElement('button');
   addBtn.type = 'button';
@@ -77,9 +81,10 @@ function buildAddRow(videoMeta) {
   addBtn.textContent = 'Add';
 
   const submit = async () => {
-    const result = await YTM_Bookmarks.addManual(videoMeta, input.value, '');
+    const result = await YTM_Bookmarks.addManual(videoMeta, input.value, labelInput.value);
     if (result.ok) {
       input.value = '';
+      labelInput.value = '';
       renderList();
     } else {
       input.classList.add('ytm-input-error');
@@ -90,8 +95,11 @@ function buildAddRow(videoMeta) {
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') submit();
   });
+  labelInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') submit();
+  });
 
-  wrap.append(input, addBtn);
+  wrap.append(input, labelInput, addBtn);
   return wrap;
 }
 
@@ -197,7 +205,7 @@ async function renderVideoGroup(videoId, clips) {
       renderList();
     },
     onPlay: async (b) => {
-      await jumpToRange(b, b.startTime, b.endTime);
+      await jumpToBookmark(b);
       return { ok: true };
     },
     onMarkStart: async (b) => {

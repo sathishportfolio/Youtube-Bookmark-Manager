@@ -8,8 +8,9 @@
   let observer = null;
   let markerRenderScheduled = false;
   let presenceCheckScheduled = false;
-  let rangeStopHandler = null;
   let rawEditorOpen = false;
+  let playQueue = null;
+  let playQueueHandler = null;
 
   function getVideoEl() {
     return document.querySelector('video.html5-main-video');
@@ -39,29 +40,54 @@
       .sort((a, b) => b.createdAt - a.createdAt)[0] || null;
   }
 
-  // --- playback -------------------------------------------------------
+  // --- playback -----------------------------------------------------
+  //
+  // Clicking Play on a bookmark plays that clip, and if the video has more
+  // bookmarks after it, keeps going: at a clip's end, it jumps straight to
+  // the next bookmark's start instead of stopping (skipping the gap
+  // between them). It only pauses at a clip's end when that clip is the
+  // last bookmark for the video. A clip with no end time is never a jump
+  // point — playback just continues through it normally (and, if it's the
+  // last bookmark, right on to the end of the video).
 
-  function clearRangeStop() {
-    if (rangeStopHandler) {
-      video.removeEventListener('timeupdate', rangeStopHandler);
-      rangeStopHandler = null;
+  function clearPlayQueue() {
+    if (playQueueHandler) {
+      video.removeEventListener('timeupdate', playQueueHandler);
+      playQueueHandler = null;
     }
+    playQueue = null;
   }
 
-  function playRange(start, end) {
+  async function playFromBookmark(bookmark) {
     if (!video) return;
-    clearRangeStop();
-    video.currentTime = start;
+    clearPlayQueue();
+
+    const clips = await getBookmarksForCurrentVideo();
+    const chronological = YTM_Bookmarks.sortByStart(clips);
+    const startIndex = chronological.findIndex((b) => b.id === bookmark.id);
+    const list = startIndex >= 0 ? chronological.slice(startIndex) : [bookmark];
+
+    video.currentTime = list[0].startTime;
     video.play().catch(() => {});
-    if (end != null) {
-      rangeStopHandler = () => {
-        if (video.currentTime >= end) {
+
+    if (list.length < 2 && list[0].endTime == null) return;
+
+    let idx = 0;
+    playQueue = list;
+    playQueueHandler = () => {
+      const current = playQueue[idx];
+      if (current.endTime != null && video.currentTime >= current.endTime) {
+        const next = playQueue[idx + 1];
+        if (next) {
+          idx += 1;
+          video.currentTime = next.startTime;
+        } else {
           video.pause();
-          clearRangeStop();
+          clearPlayQueue();
         }
-      };
-      video.addEventListener('timeupdate', rangeStopHandler);
-    }
+      }
+    };
+    video.addEventListener('timeupdate', playQueueHandler);
   }
 
   async function applyPendingPlay() {
@@ -69,12 +95,16 @@
     if (!pending || pending.videoId !== currentVideoId || !video) return;
     await YTM_Storage.clearPendingPlay();
 
+    const clips = await getBookmarksForCurrentVideo();
+    const bookmark = clips.find((b) => b.id === pending.bookmarkId);
+    if (!bookmark) return;
+
     const prefs = await YTM_Storage.getPreferences();
-    video.currentTime = pending.start;
     if (prefs.autoplay === false) {
+      video.currentTime = bookmark.startTime;
       video.pause();
     } else {
-      playRange(pending.start, pending.end);
+      playFromBookmark(bookmark);
     }
   }
 
@@ -120,7 +150,7 @@
       scheduleMarkerRender();
     },
     onPlay: async (bookmark) => {
-      playRange(bookmark.startTime, bookmark.endTime);
+      await playFromBookmark(bookmark);
       return { ok: true };
     },
     onMarkStart: async (bookmark) => {
@@ -187,7 +217,8 @@
         </div>
       </div>
       <div class="ytm-add-row">
-        <input type="text" class="ytm-add-input" placeholder="Add: 1:10 or 1:10-2:00" spellcheck="false">
+        <input type="text" class="ytm-add-input" placeholder="1:10 or 1:10-2:00" spellcheck="false">
+        <input type="text" class="ytm-add-label-input" placeholder="Label" spellcheck="false">
         <button type="button" class="ytm-btn ytm-add-btn">Add</button>
       </div>
       <textarea class="ytm-raw-editor" spellcheck="false" hidden></textarea>
@@ -205,12 +236,14 @@
     panel.querySelector('.ytm-btn-copy').addEventListener('click', copyAllBookmarks);
 
     const addInput = panel.querySelector('.ytm-add-input');
+    const addLabelInput = panel.querySelector('.ytm-add-label-input');
     const addBtn = panel.querySelector('.ytm-add-btn');
     const submitAdd = async () => {
       const meta = readMetadata();
-      const result = await YTM_Bookmarks.addManual(meta, addInput.value, '');
+      const result = await YTM_Bookmarks.addManual(meta, addInput.value, addLabelInput.value);
       if (result.ok) {
         addInput.value = '';
+        addLabelInput.value = '';
         await refreshPanel();
         scheduleMarkerRender();
       } else {
@@ -221,6 +254,9 @@
     };
     addBtn.addEventListener('click', submitAdd);
     addInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') submitAdd();
+    });
+    addLabelInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') submitAdd();
     });
 
@@ -393,7 +429,7 @@
       group.addEventListener('mouseleave', hideTooltip);
       group.addEventListener('click', (e) => {
         e.stopPropagation();
-        playRange(b.startTime, b.endTime);
+        playFromBookmark(b);
       });
 
       layer.appendChild(group);
@@ -452,7 +488,7 @@
     hideTooltip();
     if (video) {
       video.removeEventListener('loadedmetadata', renderMarkers);
-      clearRangeStop();
+      clearPlayQueue();
     }
   }
 
@@ -466,12 +502,11 @@
   });
 
   chrome.runtime.onMessage.addListener((message) => {
-    if (!message || message.videoId !== currentVideoId) return;
-    if (message.type === 'ytm-seek') {
-      playRange(message.time, null);
-    } else if (message.type === 'ytm-play-range') {
-      playRange(message.start, message.end);
-    }
+    if (!message || message.videoId !== currentVideoId || message.type !== 'ytm-play-from') return;
+    getBookmarksForCurrentVideo().then((clips) => {
+      const bookmark = clips.find((b) => b.id === message.bookmarkId);
+      if (bookmark) playFromBookmark(bookmark);
+    });
   });
 
   document.addEventListener('yt-navigate-finish', () => {

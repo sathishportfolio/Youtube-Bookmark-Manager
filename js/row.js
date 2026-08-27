@@ -5,7 +5,7 @@ const YTM_Row = {
   //   onPlay(bookmark) -> Promise<{ok, message}>,
   //   onMarkStart(bookmark) -> Promise<{ok, message}>,
   //   onMarkEnd(bookmark) -> Promise<{ok, message}>,
-  //   onSave(bookmark, rangeText, notesText) -> Promise<{ok, message}>,
+  //   onSave(bookmark, rangeText, labelText) -> Promise<{ok, message}>,
   //   onDelete(bookmark)
   // }
   render(bookmark, actions) {
@@ -22,7 +22,7 @@ const YTM_Row = {
     const playBtn = document.createElement('button');
     playBtn.type = 'button';
     playBtn.className = 'ytm-icon-btn';
-    playBtn.title = 'Play this range';
+    playBtn.title = 'Play from here';
     playBtn.textContent = '▶';
     playBtn.addEventListener('click', () => actions.onPlay(bookmark));
 
@@ -33,10 +33,14 @@ const YTM_Row = {
     rangeInput.spellcheck = false;
     rangeInput.placeholder = '1:10 or 1:10-2:00';
 
+    const duration = document.createElement('span');
+    duration.className = 'ytm-duration';
+    duration.textContent = YTM_Bookmarks.durationLabel(bookmark);
+
     const notesInput = document.createElement('input');
     notesInput.type = 'text';
     notesInput.className = 'ytm-notes-input';
-    notesInput.placeholder = 'Notes…';
+    notesInput.placeholder = 'Label';
     notesInput.value = bookmark.notes || '';
 
     const msg = document.createElement('div');
@@ -59,7 +63,7 @@ const YTM_Row = {
     startBtn.type = 'button';
     startBtn.className = 'ytm-icon-btn';
     startBtn.title = 'Mark start at current playback time';
-    startBtn.textContent = 'S⏱';
+    startBtn.textContent = '⏺';
     startBtn.disabled = !actions.canMarkTime;
     startBtn.addEventListener('click', async () => {
       showResult(await actions.onMarkStart(bookmark));
@@ -69,7 +73,7 @@ const YTM_Row = {
     endBtn.type = 'button';
     endBtn.className = 'ytm-icon-btn';
     endBtn.title = 'Mark end at current playback time';
-    endBtn.textContent = 'E⏱';
+    endBtn.textContent = '⏹';
     endBtn.disabled = !actions.canMarkTime;
     endBtn.addEventListener('click', async () => {
       showResult(await actions.onMarkEnd(bookmark));
@@ -78,7 +82,7 @@ const YTM_Row = {
     const saveBtn = document.createElement('button');
     saveBtn.type = 'button';
     saveBtn.className = 'ytm-icon-btn';
-    saveBtn.title = 'Save range and notes';
+    saveBtn.title = 'Save range and label';
     saveBtn.textContent = '💾';
     saveBtn.addEventListener('click', async () => {
       showResult(await actions.onSave(bookmark, rangeInput.value, notesInput.value));
@@ -93,9 +97,19 @@ const YTM_Row = {
 
     const topRow = document.createElement('div');
     topRow.className = 'ytm-row-top';
-    topRow.append(star, playBtn, rangeInput, startBtn, endBtn, saveBtn, deleteBtn);
+    topRow.append(
+      star,
+      playBtn,
+      rangeInput,
+      duration,
+      startBtn,
+      endBtn,
+      notesInput,
+      saveBtn,
+      deleteBtn
+    );
 
-    li.append(topRow, notesInput, msg);
+    li.append(topRow, msg);
     return li;
   }
 };

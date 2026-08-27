@@ -54,7 +54,8 @@ button.danger { color: #dc2626; border-color: #dc2626; }
 
 /* Manual add row */
 .ytm-add-row { display: flex; gap: 6px; margin-bottom: 6px; }
-.ytm-add-input {
+.ytm-add-input,
+.ytm-add-label-input {
   flex: 1;
   padding: 4px 8px;
   border: 1px solid var(--border);
@@ -63,6 +64,7 @@ button.danger { color: #dc2626; border-color: #dc2626; }
   color: var(--fg);
   font: inherit;
 }
+.ytm-add-input { flex: 0 0 110px; }
 .ytm-add-input.ytm-input-error { border-color: #dc2626; }
 .ytm-btn {
   border: 1px solid var(--border);
@@ -119,9 +121,10 @@ button.danger { color: #dc2626; border-color: #dc2626; }
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
+.ytm-duration { color: var(--muted); font-size: 11px; white-space: nowrap; }
 .ytm-notes-input {
-  width: 100%;
-  margin-top: 4px;
+  flex: 1 1 90px;
+  min-width: 60px;
   padding: 4px 8px;
   border: 1px solid var(--border);
   border-radius: 6px;
