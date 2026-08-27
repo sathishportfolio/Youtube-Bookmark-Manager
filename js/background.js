@@ -1,11 +1,11 @@
 importScripts('storage.js', 'youtube.js');
 
-const MENU_ID = 'ytm-save-bookmark';
+const MENU_ID = 'ytm-quick-start';
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({
     id: MENU_ID,
-    title: 'Save to YouTube Manager',
+    title: 'YouTube Manager: bookmark start here',
     contexts: ['page', 'link'],
     documentUrlPatterns: ['*://*.youtube.com/*'],
     targetUrlPatterns: ['*://*.youtube.com/*']
@@ -20,23 +20,23 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (!videoId) return;
 
   const meta = await YTM_Youtube.readPageMetadata(tab.id);
-  const bookmarks = await YTM_Storage.getBookmarks();
-  const existing = bookmarks[videoId];
   const now = Date.now();
-
-  bookmarks[videoId] = {
-    id: videoId,
+  const bookmark = {
+    id: `${videoId}-${now}`,
+    videoId,
     url: `https://www.youtube.com/watch?v=${videoId}`,
-    title: meta.title || existing?.title || 'Untitled video',
-    channel: meta.channel || existing?.channel || '',
+    title: meta.title || 'Untitled video',
+    channel: meta.channel || '',
     thumbnail: YTM_Youtube.thumbnailUrl(videoId),
-    tags: existing?.tags || [],
-    notes: existing?.notes || '',
-    watched: existing?.watched || false,
-    createdAt: existing?.createdAt || now,
+    startTime: meta.currentTime || 0,
+    endTime: null,
+    notes: '',
+    createdAt: now,
     updatedAt: now
   };
 
+  const bookmarks = await YTM_Storage.getBookmarks();
+  bookmarks[bookmark.id] = bookmark;
   await YTM_Storage.saveBookmarks(bookmarks);
 
   chrome.action.setBadgeText({ text: '✓' });

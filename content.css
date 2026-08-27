@@ -1,0 +1,67 @@
+.ytm-bookmark-btn {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.9;
+}
+.ytm-bookmark-btn:hover {
+  opacity: 1;
+}
+.ytm-bookmark-btn.ytm-flash svg path {
+  fill: #3ea6ff;
+}
+
+.ytm-popover {
+  position: absolute;
+  bottom: 48px;
+  left: 0;
+  z-index: 1000;
+  display: flex;
+  gap: 4px;
+  background: rgba(20, 20, 20, 0.95);
+  border-radius: 8px;
+  padding: 6px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+  white-space: nowrap;
+}
+.ytm-popover-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  color: #fff;
+  font: 12px/1 Roboto, Arial, sans-serif;
+  padding: 8px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.ytm-popover-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.ytm-marker-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 30;
+}
+.ytm-marker {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  transform: translateX(-1.5px);
+}
+.ytm-marker-start {
+  background: #3ea6ff;
+}
+.ytm-marker-end {
+  background: #ff4e45;
+}
+.ytm-marker-range {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgba(62, 166, 255, 0.28);
+}

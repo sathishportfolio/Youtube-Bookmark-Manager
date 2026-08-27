@@ -7,158 +7,155 @@ function setStatus(msg, isError = false) {
   el.classList.toggle('error', isError);
 }
 
-async function refreshAddSection() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const videoId = tab?.url ? YTM_Youtube.extractVideoId(tab.url) : null;
-  const addBtn = document.getElementById('addCurrentBtn');
-  const hint = document.getElementById('addHint');
-
-  if (videoId && tab?.id) {
-    addBtn.disabled = false;
-    addBtn.dataset.tabId = tab.id;
-    addBtn.dataset.url = tab.url;
-    hint.textContent = bookmarksCache[videoId] ? 'Already bookmarked — click to refresh it.' : '';
-  } else {
-    addBtn.disabled = true;
-    delete addBtn.dataset.tabId;
-    delete addBtn.dataset.url;
-    hint.textContent = 'Open a YouTube video to bookmark it.';
+function groupByVideo(bookmarks) {
+  const groups = new Map();
+  for (const b of bookmarks) {
+    if (!groups.has(b.videoId)) groups.set(b.videoId, []);
+    groups.get(b.videoId).push(b);
   }
+  for (const clips of groups.values()) {
+    clips.sort((a, b) => (a.startTime || 0) - (b.startTime || 0));
+  }
+  return groups;
 }
 
-async function addCurrentVideo() {
-  const addBtn = document.getElementById('addCurrentBtn');
-  const tabId = Number(addBtn.dataset.tabId);
-  const url = addBtn.dataset.url;
-  const videoId = url ? YTM_Youtube.extractVideoId(url) : null;
-  if (!videoId || !tabId) return;
-
-  addBtn.disabled = true;
-  const originalLabel = addBtn.textContent;
-  addBtn.textContent = 'Saving…';
-
-  try {
-    const meta = await YTM_Youtube.readPageMetadata(tabId);
-    const now = Date.now();
-    const existing = bookmarksCache[videoId];
-
-    bookmarksCache[videoId] = {
-      id: videoId,
-      url: `https://www.youtube.com/watch?v=${videoId}`,
-      title: meta.title || existing?.title || 'Untitled video',
-      channel: meta.channel || existing?.channel || '',
-      thumbnail: YTM_Youtube.thumbnailUrl(videoId),
-      tags: existing?.tags || [],
-      notes: existing?.notes || '',
-      watched: existing?.watched || false,
-      createdAt: existing?.createdAt || now,
-      updatedAt: now
-    };
-
-    await YTM_Storage.saveBookmarks(bookmarksCache);
-    renderList();
-    setStatus('Saved.');
-  } catch (err) {
-    setStatus(err.message, true);
-  } finally {
-    addBtn.textContent = originalLabel;
-    await refreshAddSection();
-  }
-}
-
-function matchesFilter(bookmark, query, hideWatched) {
-  if (hideWatched && bookmark.watched) return false;
+function matchesFilter(bookmark, query) {
   if (!query) return true;
-  const haystack = [bookmark.title, bookmark.channel, ...(bookmark.tags || [])].join(' ').toLowerCase();
+  const haystack = [bookmark.title, bookmark.channel, bookmark.notes].join(' ').toLowerCase();
   return haystack.includes(query.toLowerCase());
 }
 
-function renderList() {
-  const list = document.getElementById('bookmarkList');
-  const query = document.getElementById('searchInput').value.trim();
-  const hideWatched = document.getElementById('hideWatched').checked;
-  list.innerHTML = '';
+async function findTabForVideo(videoId) {
+  const tabs = await chrome.tabs.query({ url: '*://*.youtube.com/watch*' });
+  return tabs.find((t) => YTM_Youtube.extractVideoId(t.url) === videoId) || null;
+}
 
-  const all = Object.values(bookmarksCache);
-  const items = all
-    .filter(b => matchesFilter(b, query, hideWatched))
-    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-
-  document.getElementById('emptyState').hidden = all.length > 0;
-
-  for (const bookmark of items) {
-    list.appendChild(renderItem(bookmark));
+async function jumpTo(bookmark, time) {
+  const tab = await findTabForVideo(bookmark.videoId);
+  if (tab) {
+    await chrome.tabs
+      .sendMessage(tab.id, { type: 'ytm-seek', videoId: bookmark.videoId, time })
+      .catch(() => {});
+    await chrome.tabs.update(tab.id, { active: true });
+    await chrome.windows.update(tab.windowId, { focused: true });
+  } else {
+    await chrome.tabs.create({ url: `${bookmark.url}&t=${Math.floor(time)}s` });
   }
 }
 
-function renderItem(bookmark) {
-  const li = document.createElement('li');
-  li.className = 'bookmark';
+function renderList() {
+  const container = document.getElementById('videoList');
+  const query = document.getElementById('searchInput').value.trim();
+  container.innerHTML = '';
+
+  const all = Object.values(bookmarksCache);
+  const filtered = all.filter((b) => matchesFilter(b, query));
+  const groups = groupByVideo(filtered);
+
+  document.getElementById('emptyState').hidden = all.length > 0;
+
+  const sortedVideoIds = [...groups.keys()].sort((a, b) => {
+    const aLatest = Math.max(...groups.get(a).map((c) => c.updatedAt || 0));
+    const bLatest = Math.max(...groups.get(b).map((c) => c.updatedAt || 0));
+    return bLatest - aLatest;
+  });
+
+  for (const videoId of sortedVideoIds) {
+    container.appendChild(renderVideoGroup(videoId, groups.get(videoId)));
+  }
+}
+
+function renderVideoGroup(videoId, clips) {
+  const first = clips[0];
+  const group = document.createElement('section');
+  group.className = 'video-group';
+
+  const header = document.createElement('div');
+  header.className = 'video-header';
 
   const img = document.createElement('img');
-  img.src = bookmark.thumbnail;
+  img.src = first.thumbnail;
   img.alt = '';
 
-  const body = document.createElement('div');
-  body.className = 'bookmark-body';
-
-  const title = document.createElement('a');
-  title.href = bookmark.url;
-  title.target = '_blank';
-  title.textContent = bookmark.title;
-
   const meta = document.createElement('div');
-  meta.className = 'bookmark-meta';
-  meta.textContent = bookmark.channel;
+  meta.className = 'video-meta';
+  const title = document.createElement('a');
+  title.href = first.url;
+  title.target = '_blank';
+  title.textContent = first.title;
+  const channel = document.createElement('div');
+  channel.className = 'video-channel';
+  channel.textContent = first.channel;
+  meta.append(title, channel);
 
-  const tags = document.createElement('div');
-  tags.className = 'tags';
-  (bookmark.tags || []).forEach(tag => {
-    const chip = document.createElement('span');
-    chip.className = 'tag';
-    chip.textContent = tag;
-    tags.appendChild(chip);
-  });
+  header.append(img, meta);
+  group.appendChild(header);
 
-  const actions = document.createElement('div');
-  actions.className = 'actions';
+  const clipList = document.createElement('ul');
+  clipList.className = 'clip-list';
+  for (const clip of clips) {
+    clipList.appendChild(renderClip(clip));
+  }
+  group.appendChild(clipList);
 
-  const watchedLabel = document.createElement('label');
-  watchedLabel.className = 'checkbox';
-  const watchedCb = document.createElement('input');
-  watchedCb.type = 'checkbox';
-  watchedCb.checked = !!bookmark.watched;
-  watchedCb.addEventListener('change', async () => {
-    bookmark.watched = watchedCb.checked;
-    bookmark.updatedAt = Date.now();
-    await YTM_Storage.saveBookmarks(bookmarksCache);
-    renderList();
-  });
-  watchedLabel.append(watchedCb, document.createTextNode('Watched'));
+  return group;
+}
 
-  const tagBtn = document.createElement('button');
-  tagBtn.textContent = 'Tags';
-  tagBtn.addEventListener('click', async () => {
-    const input = prompt('Comma-separated tags:', (bookmark.tags || []).join(', '));
-    if (input === null) return;
-    bookmark.tags = input.split(',').map(t => t.trim()).filter(Boolean);
-    bookmark.updatedAt = Date.now();
-    await YTM_Storage.saveBookmarks(bookmarksCache);
-    renderList();
-  });
+function renderClip(bookmark) {
+  const li = document.createElement('li');
+  li.className = 'clip';
+
+  const times = document.createElement('div');
+  times.className = 'clip-times';
+
+  const startBtn = document.createElement('button');
+  startBtn.className = 'time-btn';
+  startBtn.textContent = YTM_Youtube.formatTime(bookmark.startTime);
+  startBtn.title = 'Resume from start';
+  startBtn.addEventListener('click', () => jumpTo(bookmark, bookmark.startTime));
+  times.appendChild(startBtn);
+
+  if (bookmark.endTime != null) {
+    const arrow = document.createElement('span');
+    arrow.className = 'clip-arrow';
+    arrow.textContent = '→';
+    times.appendChild(arrow);
+
+    const endBtn = document.createElement('button');
+    endBtn.className = 'time-btn';
+    endBtn.textContent = YTM_Youtube.formatTime(bookmark.endTime);
+    endBtn.title = 'Resume from end';
+    endBtn.addEventListener('click', () => jumpTo(bookmark, bookmark.endTime));
+    times.appendChild(endBtn);
+  } else {
+    const pending = document.createElement('span');
+    pending.className = 'clip-pending';
+    pending.textContent = 'no end set';
+    times.appendChild(pending);
+  }
 
   const deleteBtn = document.createElement('button');
+  deleteBtn.className = 'danger clip-delete';
   deleteBtn.textContent = 'Delete';
-  deleteBtn.className = 'danger';
   deleteBtn.addEventListener('click', async () => {
     delete bookmarksCache[bookmark.id];
     await YTM_Storage.saveBookmarks(bookmarksCache);
     renderList();
   });
+  times.appendChild(deleteBtn);
 
-  actions.append(watchedLabel, tagBtn, deleteBtn);
-  body.append(title, meta, tags, actions);
-  li.append(img, body);
+  const notes = document.createElement('textarea');
+  notes.className = 'clip-notes';
+  notes.placeholder = 'Notes…';
+  notes.value = bookmark.notes || '';
+  notes.rows = 1;
+  notes.addEventListener('change', async () => {
+    bookmark.notes = notes.value;
+    bookmark.updatedAt = Date.now();
+    await YTM_Storage.saveBookmarks(bookmarksCache);
+  });
+
+  li.append(times, notes);
   return li;
 }
 
@@ -192,11 +189,8 @@ async function syncNow() {
 document.addEventListener('DOMContentLoaded', async () => {
   bookmarksCache = await YTM_Storage.getBookmarks();
   renderList();
-  await refreshAddSection();
 
-  document.getElementById('addCurrentBtn').addEventListener('click', addCurrentVideo);
   document.getElementById('syncBtn').addEventListener('click', syncNow);
   document.getElementById('optionsBtn').addEventListener('click', () => chrome.runtime.openOptionsPage());
   document.getElementById('searchInput').addEventListener('input', renderList);
-  document.getElementById('hideWatched').addEventListener('change', renderList);
 });

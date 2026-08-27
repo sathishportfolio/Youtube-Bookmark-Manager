@@ -12,10 +12,14 @@ to work from.
 
 ## Core features (target v1)
 
-- Save the current YouTube video as a bookmark from the browser toolbar/popup
-  (title, URL, video ID, channel, thumbnail, tags/notes, saved date).
-- View, search, and organize saved bookmarks (tags/categories, mark
-  watched/unwatched).
+- Bookmark specific moments in a video: a start point and (optionally) an
+  end point, set via a 🔖 icon injected into the YouTube player next to the
+  volume control, or via a right-click "quick start" context menu item.
+- A video can have multiple bookmarked clips. Start/end times are shown as
+  markers directly on the YouTube seek bar.
+- Popup groups clips by video; each clip has editable notes, single-click
+  delete, and clicking a timestamp resumes playback from that point (in an
+  existing tab if the video is already open, otherwise a new tab).
 - Sync bookmarks to a GitHub Gist:
   - Gist content is the source of truth; local storage is a cache.
   - Push local changes to the Gist, pull remote changes into local storage.

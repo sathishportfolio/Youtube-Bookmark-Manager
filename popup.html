@@ -14,18 +14,17 @@
     </div>
   </header>
 
-  <div id="addSection">
-    <button id="addCurrentBtn" disabled>+ Bookmark current video</button>
-    <p id="addHint" class="hint"></p>
-  </div>
+  <p class="hint">
+    Click the 🔖 icon next to the volume control on any YouTube video to
+    bookmark start/end points, or right-click a video page for a quick start.
+  </p>
 
   <div id="controls">
-    <input id="searchInput" type="search" placeholder="Search title, channel, tag…">
-    <label class="checkbox"><input type="checkbox" id="hideWatched"> Hide watched</label>
+    <input id="searchInput" type="search" placeholder="Search title, channel, notes…">
   </div>
 
-  <ul id="bookmarkList"></ul>
-  <p id="emptyState" class="hint" hidden>No bookmarks yet. Open a YouTube video and click "Bookmark current video".</p>
+  <div id="videoList"></div>
+  <p id="emptyState" class="hint" hidden>No bookmarks yet.</p>
   <p id="statusMsg" class="status" hidden></p>
 
   <script src="js/storage.js"></script>

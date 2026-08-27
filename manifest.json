@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "YouTube Manager",
-  "version": "0.1.0",
-  "description": "Bookmark and organize YouTube videos, synced to your own GitHub Gist.",
+  "version": "0.2.0",
+  "description": "Bookmark start/end points in YouTube videos, synced to your own GitHub Gist.",
   "action": {
     "default_popup": "popup.html"
   },
@@ -10,6 +10,14 @@
   "background": {
     "service_worker": "js/background.js"
   },
-  "permissions": ["storage", "activeTab", "scripting", "contextMenus"],
+  "content_scripts": [
+    {
+      "matches": ["*://*.youtube.com/watch*"],
+      "js": ["js/youtube.js", "js/storage.js", "js/content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "permissions": ["storage", "activeTab", "scripting", "contextMenus", "tabs"],
   "host_permissions": ["https://api.github.com/*", "*://*.youtube.com/*"]
 }

@@ -16,7 +16,7 @@
 }
 * { box-sizing: border-box; }
 body {
-  width: 380px;
+  width: 400px;
   margin: 0;
   padding: 12px;
   font: 13px/1.4 -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -38,21 +38,38 @@ button {
 button:hover { border-color: var(--accent); }
 button:disabled { opacity: 0.5; cursor: default; }
 button.danger { color: #dc2626; border-color: #dc2626; }
-#addSection { margin-bottom: 10px; }
-#addCurrentBtn { width: 100%; padding: 8px; font-size: 13px; }
-.hint { color: var(--muted); font-size: 11px; margin: 4px 0; }
-#controls { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
-#searchInput { flex: 1; padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--fg); }
-.checkbox { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--muted); white-space: nowrap; }
-#bookmarkList { list-style: none; margin: 0; padding: 0; max-height: 380px; overflow-y: auto; }
-.bookmark { display: flex; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); }
-.bookmark img { width: 80px; height: 45px; object-fit: cover; border-radius: 4px; flex-shrink: 0; background: var(--border); }
-.bookmark-body { min-width: 0; flex: 1; }
-.bookmark-body a { color: var(--fg); text-decoration: none; font-weight: 600; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bookmark-body a:hover { text-decoration: underline; }
-.bookmark-meta { color: var(--muted); font-size: 11px; }
-.tags { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0; }
-.tag { background: var(--border); border-radius: 10px; padding: 1px 7px; font-size: 10px; }
-.actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.status { padding: 6px 8px; border-radius: 6px; background: #ecfdf5; color: #065f46; font-size: 12px; }
+.hint { color: var(--muted); font-size: 11px; margin: 4px 0 10px; }
+#controls { margin-bottom: 8px; }
+#searchInput { width: 100%; padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--fg); }
+
+#videoList { max-height: 420px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+
+.video-group { border: 1px solid var(--border); border-radius: 8px; padding: 8px; }
+.video-header { display: flex; gap: 8px; margin-bottom: 6px; }
+.video-header img { width: 80px; height: 45px; object-fit: cover; border-radius: 4px; flex-shrink: 0; background: var(--border); }
+.video-meta { min-width: 0; flex: 1; }
+.video-meta a { color: var(--fg); text-decoration: none; font-weight: 600; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.video-meta a:hover { text-decoration: underline; }
+.video-channel { color: var(--muted); font-size: 11px; }
+
+.clip-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.clip { border-top: 1px solid var(--border); padding-top: 6px; }
+.clip-times { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.time-btn { font-variant-numeric: tabular-nums; }
+.clip-arrow { color: var(--muted); }
+.clip-pending { color: var(--muted); font-size: 11px; font-style: italic; }
+.clip-delete { margin-left: auto; }
+.clip-notes {
+  width: 100%;
+  margin-top: 4px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  resize: vertical;
+}
+
+.status { padding: 6px 8px; border-radius: 6px; background: #ecfdf5; color: #065f46; font-size: 12px; margin-top: 8px; }
 .status.error { background: #fef2f2; color: #b91c1c; }
