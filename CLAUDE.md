@@ -28,8 +28,11 @@ to work from.
   and mutation logic shared by both surfaces.
 - Autoplay is a global preference synced through the Gist alongside
   bookmarks (see the combined `{bookmarks, preferences}` payload in
-  `js/gist.js`); it only gates the "open a bookmark in a new tab" flow —
-  playback in an already-open tab always plays immediately.
+  `js/gist.js`). It gates the chained-playback behavior itself: on, Play
+  jumps between bookmarks and stops after the last one; off, Play just
+  seeks and plays the video normally from that point, with no jumping or
+  pausing at clip boundaries. Both branches live in `playFromBookmark` in
+  `js/content.js`.
 - Sync bookmarks to a GitHub Gist:
   - Gist content is the source of truth; local storage is a cache.
   - Push local changes to the Gist, pull remote changes into local storage.

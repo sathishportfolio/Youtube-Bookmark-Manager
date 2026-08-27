@@ -42,9 +42,11 @@ third-party account required beyond GitHub.
   (`* 1:10-2:00 label`, one per line; a leading `*` marks it a favorite).
 - **Copy all** — export a video's clips as that same raw text, to your
   clipboard.
-- **Autoplay toggle** — a global, Gist-synced preference. With it off,
-  opening a bookmark in a new tab seeks to that point without auto-playing;
-  clips opened in an already-open tab always play immediately.
+- **Autoplay toggle** — a global, Gist-synced preference that controls
+  chained playback (see above). **On**: Play jumps between bookmarks and
+  stops after the last one. **Off**: Play just seeks to that bookmark and
+  plays the video normally from there, with no jumping or pausing at clip
+  boundaries.
 - **Quick actions from anywhere** — right-click any YouTube page or video
   link and choose *"bookmark start here"* to save the current playback
   position without opening the popup or panel. Once a clip has a start but
@@ -168,8 +170,9 @@ This extension isn't on the Chrome Web Store yet — install it unpacked:
    touching playback, or **Raw text** to bulk add/edit a video's clips as
    plain text. **Copy all** copies that video's clips as the same text
    format.
-8. Toggle **Autoplay** (synced across your devices) to control whether
-   opening a bookmark in a new tab auto-plays or just seeks to that point.
+8. Toggle **Autoplay** (synced across your devices) to control whether Play
+   chains between bookmarks (on) or just plays normally from the clicked
+   point with no jumping or pausing (off).
 
 Right-clicking a YouTube page or video link offers a shortcut for the first
 two steps without opening the panel: *"bookmark start here"* always shows

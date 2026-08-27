@@ -42,13 +42,17 @@
 
   // --- playback -----------------------------------------------------
   //
-  // Clicking Play on a bookmark plays that clip, and if the video has more
-  // bookmarks after it, keeps going: at a clip's end, it jumps straight to
-  // the next bookmark's start instead of stopping (skipping the gap
-  // between them). It only pauses at a clip's end when that clip is the
-  // last bookmark for the video. A clip with no end time is never a jump
-  // point — playback just continues through it normally (and, if it's the
-  // last bookmark, right on to the end of the video).
+  // Autoplay ON: clicking Play on a bookmark plays that clip, and if the
+  // video has more bookmarks after it, keeps going — at a clip's end, it
+  // jumps straight to the next bookmark's start instead of stopping
+  // (skipping the gap between them). It only pauses at a clip's end when
+  // that clip is the last bookmark for the video. A clip with no end time
+  // is never a jump point — playback just continues through it normally
+  // (and, if it's the last bookmark, right on to the end of the video).
+  //
+  // Autoplay OFF: Play just seeks to the bookmark's start and plays the
+  // video normally from there — no jumping between bookmarks, no pausing
+  // at any clip's end.
 
   function clearPlayQueue() {
     if (playQueueHandler) {
@@ -61,6 +65,13 @@
   async function playFromBookmark(bookmark) {
     if (!video) return;
     clearPlayQueue();
+
+    const prefs = await YTM_Storage.getPreferences();
+    if (prefs.autoplay === false) {
+      video.currentTime = bookmark.startTime;
+      video.play().catch(() => {});
+      return;
+    }
 
     const clips = await getBookmarksForCurrentVideo();
     const chronological = YTM_Bookmarks.sortByStart(clips);
@@ -90,16 +101,6 @@
     video.addEventListener('timeupdate', playQueueHandler);
   }
 
-  async function startPlaybackAt(bookmark) {
-    const prefs = await YTM_Storage.getPreferences();
-    if (prefs.autoplay === false) {
-      video.currentTime = bookmark.startTime;
-      video.pause();
-    } else {
-      playFromBookmark(bookmark);
-    }
-  }
-
   // On page load: a cross-tab "play this bookmark" request (from the popup)
   // takes priority; otherwise, if this video already has bookmarks, start
   // from the earliest one rather than wherever YouTube would normally begin.
@@ -112,7 +113,7 @@
       const clips = await getBookmarksForCurrentVideo();
       const bookmark = clips.find((b) => b.id === pending.bookmarkId);
       if (bookmark) {
-        await startPlaybackAt(bookmark);
+        await playFromBookmark(bookmark);
         return;
       }
     }
@@ -120,7 +121,7 @@
     const clips = await getBookmarksForCurrentVideo();
     const chronological = YTM_Bookmarks.sortByStart(clips);
     if (chronological.length > 0) {
-      await startPlaybackAt(chronological[0]);
+      await playFromBookmark(chronological[0]);
     }
   }
 
@@ -227,7 +228,7 @@
           <span class="ytm-hint"></span>
         </div>
         <div class="ytm-panel-toolbar">
-          <button type="button" class="ytm-btn ytm-btn-autoplay" title="Toggle autoplay on jump-to actions">Autoplay: On</button>
+          <button type="button" class="ytm-btn ytm-btn-autoplay" title="On: Play jumps between bookmarks and stops after the last one. Off: Play just plays the video normally from that point.">Autoplay: On</button>
           <button type="button" class="ytm-btn ytm-btn-raw" title="Bulk add/edit as text">Raw text</button>
           <button type="button" class="ytm-btn ytm-btn-copy" title="Copy this video's bookmarks as text">Copy all</button>
         </div>
