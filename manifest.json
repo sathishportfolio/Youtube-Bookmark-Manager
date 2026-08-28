@@ -1,5 +1,6 @@
 {
   "manifest_version": 3,
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA+vgEWhDQyure024XBjkrJhBkkyjsdvkGil3s+uL4NOYwdtFEjo6Ut7SFLyyy+HdCYXQYiD1iAGFP/27Eh8XBD1nbHHWa8fskZYmHuZZfkIwsixf3b/+B47hQjUp2+F8plw2MDuQzPGXuP5PorB5avUTLmL7rxkjIw1oozXBwvb0diY7XSu1fe5YUJT9vLPCGZDsy29EgxFeYe+gtqQTCI9ru1UqmWwL/wCS7X2GYkZ9IM2VDmGQzR6mBOAkpYzX/XcgfKe9X2EFyFUJ6Dxgw4qEwMiW1mp8t5YQ/PySXF7QYKn4l3odAkb+v51Jc1jsxLRiTONFjNtTk2vLu+FWXCQIDAQAB",
   "name": "YouTube Manager",
   "version": "0.3.0",
   "description": "Bookmark start/end points in YouTube videos, synced to your own GitHub Gist.",
