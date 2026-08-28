@@ -74,8 +74,8 @@
   // getPlayerVideoData() or the meta-tag fallback below.
   function readChannelUrl() {
     const href =
-      document.querySelector('link[itemprop="url"]')?.href ||
       document.querySelector('ytd-channel-name#channel-name a')?.href ||
+      document.querySelector('[itemprop="author"] link[itemprop="url"]')?.href ||
       '';
     return href ? href.replace(/\/$/, '') : '';
   }

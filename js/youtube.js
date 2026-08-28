@@ -49,8 +49,8 @@ const YTM_Youtube = {
               '';
           }
           const channelUrlHref =
-            document.querySelector('link[itemprop="url"]')?.href ||
             document.querySelector('ytd-channel-name#channel-name a')?.href ||
+            document.querySelector('[itemprop="author"] link[itemprop="url"]')?.href ||
             '';
           const channelUrl = channelUrlHref ? channelUrlHref.replace(/\/$/, '') : '';
           const video = document.querySelector('video.html5-main-video');
