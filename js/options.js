@@ -103,6 +103,7 @@ async function resetFromGist() {
   await YTM_Storage.saveTags(remote.tags);
   await YTM_Storage.saveTagsLastModified(remote.tagsLastModified);
   await YTM_Storage.saveAllVideoTags(remote.videoTags);
+  await YTM_Storage.saveVideoRanks(remote.videoRanks || { ranks: {}, updatedAt: 0 });
   if (remote.preferences && Object.keys(remote.preferences).length > 0) {
     await YTM_Storage.savePreferences(remote.preferences);
   }
@@ -183,13 +184,14 @@ async function deleteDataOnly() {
 
   if (settings.token && settings.gistId) {
     try {
-      const [bookmarks, lastModifiedByVideoId, preferences, tags, tagsLastModified, videoTags] = await Promise.all([
+      const [bookmarks, lastModifiedByVideoId, preferences, tags, tagsLastModified, videoTags, videoRanks] = await Promise.all([
         YTM_Storage.getAllBookmarks(),
         YTM_Storage.getLastModifiedByVideoId(),
         YTM_Storage.getPreferences(),
         YTM_Storage.getTags(),
         YTM_Storage.getTagsLastModified(),
-        YTM_Storage.getAllVideoTags()
+        YTM_Storage.getAllVideoTags(),
+        YTM_Storage.getVideoRanks()
       ]);
       await YTM_Gist.pushData(settings.token, settings.gistId, {
         bookmarks,
@@ -197,7 +199,8 @@ async function deleteDataOnly() {
         preferences,
         tags,
         tagsLastModified,
-        videoTags
+        videoTags,
+        videoRanks
       });
       await YTM_Storage.saveSettings({ ...settings, lastSyncedAt: Date.now(), lastSyncError: null });
     } catch (err) {

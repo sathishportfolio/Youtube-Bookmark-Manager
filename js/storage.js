@@ -51,13 +51,18 @@ const YTM_Storage = {
 
   async saveBookmarksForVideo(videoId, clips) {
     const all = await this.getAllBookmarks();
-    if (clips && clips.length > 0) {
+    const hadClips = !!(all[videoId] && all[videoId].length > 0);
+    const hasClips = !!(clips && clips.length > 0);
+    if (hasClips) {
       all[videoId] = clips;
     } else {
       delete all[videoId];
     }
     await this._set({ bookmarks: all });
     await this.touchVideo(videoId);
+
+    if (hasClips && !hadClips) await this.ensureVideoRank(videoId);
+    else if (!hasClips && hadClips) await this.removeVideoRank(videoId);
   },
 
   async getLastModifiedByVideoId() {
@@ -188,6 +193,76 @@ const YTM_Storage = {
     await this._set({ videoMeta: all });
   },
 
+  // --- video ranks (manual per-video ordering, synced through the Gist) --
+  //
+  // A dense 1..N ranking across every video that has at least one
+  // bookmark — assigned automatically (next available number) the first
+  // time a video gets a bookmark, and closed up with no gaps when a
+  // video's last bookmark is removed (see saveBookmarksForVideo below).
+  // Stored as one blob with its own updatedAt and merged whole-object,
+  // last-write-wins (YTM_Gist.mergeVideoRanks), the same way
+  // `preferences` merges — unlike tags/clips, setting one video's rank
+  // cascades a shift across every other rank in the affected range, so
+  // there's no clean way to merge two devices' ranks entry by entry.
+  async getVideoRanks() {
+    return this._get('videoRanks', { ranks: {}, updatedAt: 0 });
+  },
+
+  async saveVideoRanks(videoRanks) {
+    await this._set({ videoRanks });
+  },
+
+  async getVideoRank(videoId) {
+    const { ranks } = await this.getVideoRanks();
+    return ranks[videoId] ?? null;
+  },
+
+  async ensureVideoRank(videoId) {
+    const stored = await this.getVideoRanks();
+    if (stored.ranks[videoId] != null) return;
+    const values = Object.values(stored.ranks);
+    const nextRank = values.length > 0 ? Math.max(...values) + 1 : 1;
+    await this.saveVideoRanks({ ranks: { ...stored.ranks, [videoId]: nextRank }, updatedAt: Date.now() });
+  },
+
+  async removeVideoRank(videoId) {
+    const stored = await this.getVideoRanks();
+    const removed = stored.ranks[videoId];
+    if (removed == null) return;
+    const ranks = {};
+    for (const [id, r] of Object.entries(stored.ranks)) {
+      if (id === videoId) continue;
+      ranks[id] = r > removed ? r - 1 : r;
+    }
+    await this.saveVideoRanks({ ranks, updatedAt: Date.now() });
+  },
+
+  // Moves videoId to `newRank` (1-based), shifting every other video's
+  // rank in the affected range by one so ranks stay a dense, gap-free
+  // sequence — e.g. setting a video to rank 1 pushes the video that was
+  // rank 1 to rank 2, the old rank 2 to rank 3, and so on.
+  async setVideoRank(videoId, newRank) {
+    const stored = await this.getVideoRanks();
+    const ranks = { ...stored.ranks };
+    const oldRank = ranks[videoId];
+    const total = Object.keys(ranks).length + (oldRank == null ? 1 : 0);
+    const clamped = Math.max(1, Math.min(Math.round(newRank) || 1, total));
+    if (oldRank === clamped) return;
+
+    for (const [id, r] of Object.entries(stored.ranks)) {
+      if (id === videoId) continue;
+      if (oldRank == null) {
+        if (r >= clamped) ranks[id] = r + 1;
+      } else if (clamped < oldRank) {
+        if (r >= clamped && r < oldRank) ranks[id] = r + 1;
+      } else if (r > oldRank && r <= clamped) {
+        ranks[id] = r - 1;
+      }
+    }
+    ranks[videoId] = clamped;
+    await this.saveVideoRanks({ ranks, updatedAt: Date.now() });
+  },
+
   // --- settings (local only: token, gist id) ------------------------------
 
   async getSettings() {
@@ -246,6 +321,7 @@ const YTM_Storage = {
       'tagsLastModified',
       'pendingTagDeletions',
       'videoTags',
+      'videoRanks',
       'preferences',
       'videoMeta',
       'pendingPlay',
@@ -278,6 +354,7 @@ const YTM_Storage = {
     await this.saveAllVideoTags({});
     await this.saveTags([]);
     await this.saveTagsLastModified({});
+    await this.saveVideoRanks({ ranks: {}, updatedAt: Date.now() });
     await this._remove(['videoMeta', 'pendingPlay', 'pendingTagDeletions']);
   }
 };

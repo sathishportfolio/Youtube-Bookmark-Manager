@@ -382,6 +382,33 @@
   min-width: 0;
   flex: 1;
 }
+.ytm-playlist-rank {
+  display: inline-block;
+  border: 1px solid var(--yt-spec-10-percent-layer, rgba(128, 128, 128, 0.3));
+  border-radius: 10px;
+  padding: 1px 7px;
+  margin-bottom: 3px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--yt-spec-text-secondary, #909090);
+  cursor: pointer;
+}
+.ytm-playlist-rank:hover {
+  border-color: var(--yt-spec-call-to-action, #3ea6ff);
+  color: var(--yt-spec-call-to-action, #3ea6ff);
+}
+.ytm-playlist-rank-input {
+  display: block;
+  width: 52px;
+  margin-bottom: 3px;
+  padding: 1px 6px;
+  border: 1px solid var(--yt-spec-call-to-action, #3ea6ff);
+  border-radius: 10px;
+  background: var(--yt-spec-general-background-a, transparent);
+  color: var(--yt-spec-text-primary, inherit);
+  font: inherit;
+  font-size: 11px;
+}
 .ytm-playlist-title {
   display: block;
   color: var(--yt-spec-text-primary, inherit);

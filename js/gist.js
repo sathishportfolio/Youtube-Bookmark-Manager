@@ -36,9 +36,9 @@ const YTM_Gist = {
   },
 
   // Returns { bookmarks, lastModifiedByVideoId, preferences, tags,
-  // tagsLastModified, videoTags } — the gist file holds all of it so
-  // Autoplay, per-video clip data, and tags all follow the user across
-  // devices.
+  // tagsLastModified, videoTags, videoRanks } — the gist file holds all of
+  // it so Autoplay, per-video clip data, tags, and video ranks all follow
+  // the user across devices.
   async fetchData(token, gistId) {
     const gist = await this.request(`/gists/${gistId}`, token);
     const file = gist.files[this.FILE_NAME];
@@ -52,7 +52,8 @@ const YTM_Gist = {
         preferences: data.preferences || {},
         tags: this._normalizeTags(data.tags),
         tagsLastModified: data.tagsLastModified || {},
-        videoTags: data.videoTags || {}
+        videoTags: data.videoTags || {},
+        videoRanks: data.videoRanks || { ranks: {}, updatedAt: 0 }
       };
     } catch {
       return this._empty();
@@ -86,7 +87,8 @@ const YTM_Gist = {
       preferences: {},
       tags: [],
       tagsLastModified: {},
-      videoTags: {}
+      videoTags: {},
+      videoRanks: { ranks: {}, updatedAt: 0 }
     };
   },
 
@@ -178,6 +180,16 @@ const YTM_Gist = {
   },
 
   mergePreferences(local, remote) {
+    if (!remote || (local?.updatedAt || 0) >= (remote.updatedAt || 0)) return local;
+    return remote;
+  },
+
+  // Whole-object, last-write-wins — same shape as mergePreferences. A
+  // rank change cascades a shift across every other video's rank in the
+  // affected range, so there's no clean per-video way to merge two
+  // devices' ranks the way mergeVideoData does for clips/tags; whichever
+  // device touched ranks more recently wins the entire ranking.
+  mergeVideoRanks(local, remote) {
     if (!remote || (local?.updatedAt || 0) >= (remote.updatedAt || 0)) return local;
     return remote;
   }

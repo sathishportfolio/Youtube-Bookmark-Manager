@@ -51,12 +51,38 @@ const YTM_Bookmarks = {
     return clips.map((c) => this.decorate(videoId, c, meta));
   },
 
+  // Assigns a rank to any bookmarked video that doesn't have one yet —
+  // covers installs upgrading from before ranks existed, where
+  // saveBookmarksForVideo's auto-assign never ran. Ordered by lastUpdated
+  // so older videos land at the front of the ranking. A no-op (no writes)
+  // once every video has been backfilled, which is the steady state.
+  async backfillVideoRanks(allBookmarks) {
+    const stored = await YTM_Storage.getVideoRanks();
+    const missing = Object.keys(allBookmarks).filter(
+      (id) => allBookmarks[id]?.length > 0 && stored.ranks[id] == null
+    );
+    if (missing.length === 0) return stored.ranks;
+
+    missing.sort((a, b) => {
+      const lastA = Math.max(0, ...allBookmarks[a].map((c) => c.updatedAt || 0));
+      const lastB = Math.max(0, ...allBookmarks[b].map((c) => c.updatedAt || 0));
+      return lastA - lastB;
+    });
+
+    const ranks = { ...stored.ranks };
+    let next = Object.values(ranks).length > 0 ? Math.max(...Object.values(ranks)) + 1 : 1;
+    for (const id of missing) ranks[id] = next++;
+    await YTM_Storage.saveVideoRanks({ ranks, updatedAt: Date.now() });
+    return ranks;
+  },
+
   // For the Library page: every video that has at least one clip, each
   // with its clips already decorated. `tags` resolves each video's stored
   // tag ids to { id, name } pairs (deleted/unknown ids are dropped) so
   // callers can display names without also depending on the tag list.
   async getAllVideoGroups() {
     const all = await YTM_Storage.getAllBookmarks();
+    const ranks = await this.backfillVideoRanks(all);
     const allTags = await YTM_Storage.getTags();
     const tagsById = new Map(allTags.map((t) => [t.id, t]));
 
@@ -74,10 +100,22 @@ const YTM_Bookmarks = {
         url: this.videoUrl(videoId),
         clips: clips.map((c) => this.decorate(videoId, c, meta)),
         tags,
+        rank: ranks[videoId] ?? null,
         lastUpdated: Math.max(0, ...clips.map((c) => c.updatedAt || 0))
       });
     }
     return groups;
+  },
+
+  // Sets a video's manual rank, shifting every other affected video's
+  // rank by one (see YTM_Storage.setVideoRank). Rejects non-numeric/
+  // sub-1 input rather than silently clamping, so a mistyped value in the
+  // UI surfaces as an error instead of quietly landing at rank 1.
+  async setVideoRank(videoId, rank) {
+    const n = Number(rank);
+    if (!Number.isFinite(n) || n < 1) return { ok: false, message: 'Enter a rank of 1 or higher.' };
+    await YTM_Storage.setVideoRank(videoId, Math.round(n));
+    return { ok: true };
   },
 
   async findPendingClip(videoId) {

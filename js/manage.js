@@ -2,6 +2,7 @@ let groupsCache = [];
 let allTagsCache = [];
 const expandedVideoIds = new Set();
 const selectedTagFilters = new Set();
+let videoSort = 'recent';
 let tagManagerOpen = false;
 let tagManagerSort = 'az';
 let tagManagerQuery = '';
@@ -20,6 +21,30 @@ function setStatus(msg, isError = false) {
   el.textContent = msg;
   el.hidden = !msg;
   el.classList.toggle('error', isError);
+}
+
+function sortGroups(groups, sort) {
+  const sorted = groups.slice();
+  switch (sort) {
+    case 'az':
+      sorted.sort((a, b) => a.title.localeCompare(b.title));
+      break;
+    case 'za':
+      sorted.sort((a, b) => b.title.localeCompare(a.title));
+      break;
+    case 'mostClips':
+      sorted.sort((a, b) => b.clips.length - a.clips.length);
+      break;
+    case 'rankAsc':
+      sorted.sort((a, b) => (a.rank ?? Infinity) - (b.rank ?? Infinity));
+      break;
+    case 'rankDesc':
+      sorted.sort((a, b) => (b.rank ?? -Infinity) - (a.rank ?? -Infinity));
+      break;
+    default:
+      sorted.sort((a, b) => b.lastUpdated - a.lastUpdated);
+  }
+  return sorted;
 }
 
 function matchesFilter(group, query) {
@@ -265,6 +290,58 @@ function renderTagPopover(group, editBtn) {
   editBtn.insertAdjacentElement('afterend', popover);
 }
 
+// Click-to-edit rank badge, same interaction pattern as the tag rename
+// field below (swap the display element for an input, commit on
+// Enter/blur, Escape reverts). Setting a rank that collides with another
+// video's shifts the rest (YTM_Bookmarks.setVideoRank) — the re-render
+// after commit is what shows those shifted ranks.
+function buildVideoRankBadge(group) {
+  const badge = document.createElement('span');
+  badge.className = 'video-rank-badge';
+  badge.title = 'Click to change this video\'s rank';
+  badge.textContent = `#${group.rank}`;
+  badge.addEventListener('click', (e) => {
+    e.stopPropagation();
+    startRankEdit(badge, group);
+  });
+  return badge;
+}
+
+function startRankEdit(badge, group) {
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.min = '1';
+  input.className = 'video-rank-input';
+  input.value = group.rank;
+  badge.replaceWith(input);
+  input.focus();
+  input.select();
+
+  let done = false;
+  const commit = async () => {
+    if (done) return;
+    done = true;
+    if (Number(input.value) !== group.rank) {
+      const result = await YTM_Bookmarks.setVideoRank(group.videoId, input.value);
+      if (!result.ok) setStatus(result.message, true);
+    }
+    await renderList();
+  };
+  const cancel = () => {
+    if (done) return;
+    done = true;
+    renderList();
+  };
+
+  input.addEventListener('click', (e) => e.stopPropagation());
+  input.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter') commit();
+    else if (e.key === 'Escape') cancel();
+  });
+  input.addEventListener('blur', commit);
+}
+
 function buildVideoTagsRow(group) {
   const wrap = document.createElement('div');
   wrap.className = 'video-tags-row';
@@ -351,7 +428,7 @@ async function renderVideoGroup(group) {
   const count = document.createElement('div');
   count.className = 'video-clip-count';
   count.textContent = `${group.clips.length} bookmark${group.clips.length === 1 ? '' : 's'}`;
-  meta.append(title, channel, count, buildVideoTagsRow(group));
+  meta.append(buildVideoRankBadge(group), title, channel, count, buildVideoTagsRow(group));
 
   header.append(img, meta);
   section.appendChild(header);
@@ -558,8 +635,7 @@ async function renderList() {
   await renderTagManager();
   await renderTagFilterBar();
 
-  const filtered = groupsCache.filter((g) => matchesFilter(g, query));
-  filtered.sort((a, b) => b.lastUpdated - a.lastUpdated);
+  const filtered = sortGroups(groupsCache.filter((g) => matchesFilter(g, query)), videoSort);
 
   document.getElementById('emptyState').hidden = groupsCache.length > 0;
 
@@ -613,6 +689,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('syncBtn').addEventListener('click', syncNow);
   document.getElementById('optionsBtn').addEventListener('click', () => chrome.runtime.openOptionsPage());
   document.getElementById('searchInput').addEventListener('input', renderList);
+  document.getElementById('videoSortSelect').addEventListener('change', (e) => {
+    videoSort = e.target.value;
+    renderList();
+  });
 
   document.getElementById('manageTagsBtn').addEventListener('click', () => setTagManagerOpen(!tagManagerOpen));
   document.getElementById('addTagBtn').addEventListener('click', submitNewTag);
@@ -649,7 +729,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
-    if (changes.bookmarks || changes.tags || changes.videoTags) renderList();
+    if (changes.bookmarks || changes.tags || changes.videoTags || changes.videoRanks) renderList();
     if (changes.settings) refreshSyncStatus();
   });
 });

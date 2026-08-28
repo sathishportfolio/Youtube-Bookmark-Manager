@@ -10,7 +10,8 @@ const YTM_Sync = {
         preferences: await YTM_Storage.getPreferences(),
         tags: await YTM_Storage.getTags(),
         tagsLastModified: await YTM_Storage.getTagsLastModified(),
-        videoTags: await YTM_Storage.getAllVideoTags()
+        videoTags: await YTM_Storage.getAllVideoTags(),
+        videoRanks: await YTM_Storage.getVideoRanks()
       };
 
       const pendingTagDeletions = await YTM_Storage.getPendingTagDeletions();
@@ -23,6 +24,7 @@ const YTM_Sync = {
         const mergedVideo = YTM_Gist.mergeVideoData(local, remote);
         const mergedPrefs = YTM_Gist.mergePreferences(local.preferences, remote.preferences);
         const mergedTags = YTM_Gist.mergeTagData(local, remote);
+        const mergedRanks = YTM_Gist.mergeVideoRanks(local.videoRanks, remote.videoRanks);
 
         // A tag deleted on this device since its last successful sync has
         // no trace left in local.tagsLastModified (YTM_Tags.deleteTag
@@ -42,6 +44,7 @@ const YTM_Sync = {
         await YTM_Storage.savePreferences(mergedPrefs);
         await YTM_Storage.saveTags(mergedTags.tags);
         await YTM_Storage.saveTagsLastModified(mergedTags.tagsLastModified);
+        await YTM_Storage.saveVideoRanks(mergedRanks);
 
         await YTM_Gist.pushData(settings.token, gistId, {
           bookmarks: mergedVideo.bookmarks,
@@ -49,7 +52,8 @@ const YTM_Sync = {
           preferences: mergedPrefs,
           tags: mergedTags.tags,
           tagsLastModified: mergedTags.tagsLastModified,
-          videoTags: mergedVideo.videoTags
+          videoTags: mergedVideo.videoTags,
+          videoRanks: mergedRanks
         });
       }
 

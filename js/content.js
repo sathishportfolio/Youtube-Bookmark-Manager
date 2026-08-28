@@ -210,6 +210,12 @@
       case 'mostClips':
         sorted.sort((a, b) => b.clips.length - a.clips.length);
         break;
+      case 'rankAsc':
+        sorted.sort((a, b) => (a.rank ?? Infinity) - (b.rank ?? Infinity));
+        break;
+      case 'rankDesc':
+        sorted.sort((a, b) => (b.rank ?? -Infinity) - (a.rank ?? -Infinity));
+        break;
       default:
         sorted.sort((a, b) => b.lastUpdated - a.lastUpdated);
     }
@@ -623,6 +629,8 @@
             <option value="az">Title A–Z</option>
             <option value="za">Title Z–A</option>
             <option value="mostClips">Most bookmarks</option>
+            <option value="rankAsc">Rank (low to high)</option>
+            <option value="rankDesc">Rank (high to low)</option>
           </select>
         </div>
         <div class="ytm-playlist-tag-controls">
@@ -733,6 +741,45 @@
     bar.replaceChildren(...nodes);
   }
 
+  // Same click-to-edit pattern as the Library page's rank badge — swap
+  // the badge for a number input, commit on Enter/blur, Escape reverts.
+  // Colliding with another video's rank shifts the rest
+  // (YTM_Bookmarks.setVideoRank); renderPlaylist() picks up the shifted
+  // ranks via the storage.onChanged listener once the write lands.
+  function startPlaylistRankEdit(badge, group) {
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.min = '1';
+    input.className = 'ytm-playlist-rank-input';
+    input.value = group.rank;
+    badge.replaceWith(input);
+    input.focus();
+    input.select();
+
+    let done = false;
+    const commit = async () => {
+      if (done) return;
+      done = true;
+      if (Number(input.value) !== group.rank) {
+        await YTM_Bookmarks.setVideoRank(group.videoId, input.value);
+      }
+      renderPlaylist();
+    };
+    const cancel = () => {
+      if (done) return;
+      done = true;
+      renderPlaylist();
+    };
+
+    input.addEventListener('click', (e) => e.stopPropagation());
+    input.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') commit();
+      else if (e.key === 'Escape') cancel();
+    });
+    input.addEventListener('blur', commit);
+  }
+
   function buildPlaylistItem(group) {
     const li = document.createElement('li');
     li.className = 'ytm-playlist-item' + (group.videoId === currentVideoId ? ' active' : '');
@@ -748,6 +795,15 @@
     const meta = document.createElement('div');
     meta.className = 'ytm-playlist-meta';
 
+    const rankBadge = document.createElement('span');
+    rankBadge.className = 'ytm-playlist-rank';
+    rankBadge.title = "Click to change this video's rank";
+    rankBadge.textContent = `#${group.rank}`;
+    rankBadge.addEventListener('click', (e) => {
+      e.stopPropagation();
+      startPlaylistRankEdit(rankBadge, group);
+    });
+
     const title = document.createElement('a');
     title.href = group.url;
     title.className = 'ytm-playlist-title';
@@ -761,7 +817,7 @@
     sub.className = 'ytm-playlist-sub';
     sub.textContent = `${group.channel} · ${group.clips.length} bookmark${group.clips.length === 1 ? '' : 's'}`;
 
-    meta.append(title, sub);
+    meta.append(rankBadge, title, sub);
 
     if (group.tags.length > 0) {
       const tagsRow = document.createElement('div');
@@ -1020,7 +1076,7 @@
       }
       refreshPreferencesUI();
       syncPlaylistPrefsFromChange(changes.preferences.newValue);
-    } else if (changes.bookmarks || changes.tags || changes.videoTags) {
+    } else if (changes.bookmarks || changes.tags || changes.videoTags || changes.videoRanks) {
       renderPlaylist();
     }
     if (changes.bookmarks) {
