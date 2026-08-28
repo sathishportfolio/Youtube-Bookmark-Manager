@@ -1,10 +1,19 @@
 // Each clip is stored as { startTime, endTime, label, favorite, createdAt,
-// updatedAt } inside YTM_Storage's per-video bookmarks map — no id,
+// updatedAt } inside YTM_Storage's per-category bookmarks map — no id,
 // videoId, url, title, channel, or thumbnail on the stored object itself
 // (those are implied by the video's key, or cheaply derivable/cached).
 // For the UI, clips are "decorated" with a synthetic id (videoId::createdAt)
 // plus the derived/cached display fields, so the rest of the app can keep
 // treating a clip as one self-contained object.
+//
+// A video lives in exactly one category at a time (see js/categories.js).
+// Most call sites here (content.js's in-page panel, popup.js) don't know
+// or care which one — they just have a videoId — so this module resolves
+// "which category is this video actually in" internally wherever needed,
+// defaulting a never-before-seen video to the Default category. Only the
+// Library page (manage.js) is category-aware at the UI level, since
+// that's the only place a user picks which category to look at or moves a
+// video between them.
 const YTM_Bookmarks = {
   DUP_START_EPSILON: 0.5,
 
@@ -26,6 +35,19 @@ const YTM_Bookmarks = {
     return `https://www.youtube.com/watch?v=${videoId}`;
   },
 
+  // Which category videoId currently has bookmarks in, or null if it isn't
+  // bookmarked anywhere (a video whose last clip was just deleted no
+  // longer counts either — same "no clips = not in this category"
+  // convention YTM_Storage.saveBookmarksForVideo already uses).
+  async resolveCategoryForVideo(videoId) {
+    const categories = await YTM_Storage.getCategories();
+    for (const cat of categories) {
+      const all = await YTM_Storage.getAllBookmarks(cat.id);
+      if (all[videoId] && all[videoId].length > 0) return cat.id;
+    }
+    return null;
+  },
+
   decorate(videoId, clip, meta) {
     return {
       id: this.makeId(videoId, clip.createdAt),
@@ -33,6 +55,7 @@ const YTM_Bookmarks = {
       url: this.videoUrl(videoId),
       title: (meta && meta.title) || videoId,
       channel: (meta && meta.channel) || '',
+      channelUrl: (meta && meta.channelUrl) || '',
       thumbnail: this.thumbnailUrl(videoId),
       startTime: clip.startTime,
       endTime: clip.endTime,
@@ -44,20 +67,16 @@ const YTM_Bookmarks = {
   },
 
   async getClipsForVideo(videoId) {
+    const categoryId = await this.resolveCategoryForVideo(videoId);
     const [clips, meta] = await Promise.all([
-      YTM_Storage.getBookmarksForVideo(videoId),
+      categoryId ? YTM_Storage.getBookmarksForVideo(categoryId, videoId) : Promise.resolve([]),
       YTM_Storage.getVideoMeta(videoId)
     ]);
     return clips.map((c) => this.decorate(videoId, c, meta));
   },
 
-  // Assigns a rank to any bookmarked video that doesn't have one yet —
-  // covers installs upgrading from before ranks existed, where
-  // saveBookmarksForVideo's auto-assign never ran. Ordered by lastUpdated
-  // so older videos land at the front of the ranking. A no-op (no writes)
-  // once every video has been backfilled, which is the steady state.
-  async backfillVideoRanks(allBookmarks) {
-    const stored = await YTM_Storage.getVideoRanks();
+  async backfillVideoRanks(categoryId, allBookmarks) {
+    const stored = await YTM_Storage.getVideoRanks(categoryId);
     const missing = Object.keys(allBookmarks).filter(
       (id) => allBookmarks[id]?.length > 0 && stored.ranks[id] == null
     );
@@ -72,30 +91,33 @@ const YTM_Bookmarks = {
     const ranks = { ...stored.ranks };
     let next = Object.values(ranks).length > 0 ? Math.max(...Object.values(ranks)) + 1 : 1;
     for (const id of missing) ranks[id] = next++;
-    await YTM_Storage.saveVideoRanks({ ranks, updatedAt: Date.now() });
+    await YTM_Storage.saveVideoRanks(categoryId, { ranks, updatedAt: Date.now() });
     return ranks;
   },
 
-  // For the Library page: every video that has at least one clip, each
-  // with its clips already decorated. `tags` resolves each video's stored
-  // tag ids to { id, name } pairs (deleted/unknown ids are dropped) so
-  // callers can display names without also depending on the tag list.
-  async getAllVideoGroups() {
-    const all = await YTM_Storage.getAllBookmarks();
-    const ranks = await this.backfillVideoRanks(all);
-    const allTags = await YTM_Storage.getTags();
+  // For the Library page: every video in categoryId that has at least one
+  // clip, each with its clips already decorated. `tags` resolves each
+  // video's stored tag ids to { id, name } pairs (deleted/unknown ids are
+  // dropped) so callers can display names without also depending on the
+  // tag list.
+  async getAllVideoGroups(categoryId) {
+    const all = await YTM_Storage.getAllBookmarks(categoryId);
+    const ranks = await this.backfillVideoRanks(categoryId, all);
+    const allTags = await YTM_Storage.getTags(categoryId);
     const tagsById = new Map(allTags.map((t) => [t.id, t]));
 
     const groups = [];
     for (const [videoId, clips] of Object.entries(all)) {
       if (!clips || clips.length === 0) continue;
       const meta = await YTM_Storage.getVideoMeta(videoId);
-      const tagIds = await YTM_Storage.getVideoTags(videoId);
+      const tagIds = await YTM_Storage.getVideoTags(categoryId, videoId);
       const tags = tagIds.map((id) => tagsById.get(id)).filter(Boolean).map((t) => ({ id: t.id, name: t.name }));
       groups.push({
         videoId,
+        categoryId,
         title: (meta && meta.title) || videoId,
         channel: (meta && meta.channel) || '',
+        channelUrl: (meta && meta.channelUrl) || '',
         thumbnail: this.thumbnailUrl(videoId),
         url: this.videoUrl(videoId),
         clips: clips.map((c) => this.decorate(videoId, c, meta)),
@@ -111,15 +133,17 @@ const YTM_Bookmarks = {
   // rank by one (see YTM_Storage.setVideoRank). Rejects non-numeric/
   // sub-1 input rather than silently clamping, so a mistyped value in the
   // UI surfaces as an error instead of quietly landing at rank 1.
-  async setVideoRank(videoId, rank) {
+  async setVideoRank(categoryId, videoId, rank) {
     const n = Number(rank);
     if (!Number.isFinite(n) || n < 1) return { ok: false, message: 'Enter a rank of 1 or higher.' };
-    await YTM_Storage.setVideoRank(videoId, Math.round(n));
+    await YTM_Storage.setVideoRank(categoryId, videoId, Math.round(n));
     return { ok: true };
   },
 
   async findPendingClip(videoId) {
-    const clips = await YTM_Storage.getBookmarksForVideo(videoId);
+    const categoryId = await this.resolveCategoryForVideo(videoId);
+    if (!categoryId) return null;
+    const clips = await YTM_Storage.getBookmarksForVideo(categoryId, videoId);
     const pending = clips
       .filter((c) => c.startTime != null && c.endTime == null)
       .sort((a, b) => b.createdAt - a.createdAt)[0];
@@ -127,7 +151,9 @@ const YTM_Bookmarks = {
   },
 
   async hasPendingClip(videoId) {
-    const clips = await YTM_Storage.getBookmarksForVideo(videoId);
+    const categoryId = await this.resolveCategoryForVideo(videoId);
+    if (!categoryId) return false;
+    const clips = await YTM_Storage.getBookmarksForVideo(categoryId, videoId);
     return clips.some((c) => c.startTime != null && c.endTime == null);
   },
 
@@ -224,18 +250,24 @@ const YTM_Bookmarks = {
     return { startTime: start, endTime: end, label, favorite, createdAt: now, updatedAt: now };
   },
 
-  async rememberVideoMeta(videoId, title, channel) {
+  async rememberVideoMeta(videoId, title, channel, channelUrl) {
     if (!title && !channel) return;
-    await YTM_Storage.saveVideoMeta(videoId, { title: title || videoId, channel: channel || '' });
+    const existing = await YTM_Storage.getVideoMeta(videoId);
+    await YTM_Storage.saveVideoMeta(videoId, {
+      title: title || videoId,
+      channel: channel || '',
+      channelUrl: channelUrl || existing?.channelUrl || ''
+    });
   },
 
   async addClip(videoMeta, { start, end = null, label = '', favorite = false }) {
-    await this.rememberVideoMeta(videoMeta.videoId, videoMeta.title, videoMeta.channel);
-    const clips = await YTM_Storage.getBookmarksForVideo(videoMeta.videoId);
+    await this.rememberVideoMeta(videoMeta.videoId, videoMeta.title, videoMeta.channel, videoMeta.channelUrl);
+    const categoryId = (await this.resolveCategoryForVideo(videoMeta.videoId)) || YTM_Storage.DEFAULT_CATEGORY_ID;
+    const clips = await YTM_Storage.getBookmarksForVideo(categoryId, videoMeta.videoId);
     const clip = this.makeClip({ start, end, label, favorite });
     clips.push(clip);
-    await YTM_Storage.saveBookmarksForVideo(videoMeta.videoId, clips);
-    return this.decorate(videoMeta.videoId, clip, { title: videoMeta.title, channel: videoMeta.channel });
+    await YTM_Storage.saveBookmarksForVideo(categoryId, videoMeta.videoId, clips);
+    return this.decorate(videoMeta.videoId, clip, { title: videoMeta.title, channel: videoMeta.channel, channelUrl: videoMeta.channelUrl });
   },
 
   async addManual(videoMeta, rangeText, labelText) {
@@ -246,7 +278,9 @@ const YTM_Bookmarks = {
   },
 
   async completePendingClip(videoId, currentTime) {
-    const clips = await YTM_Storage.getBookmarksForVideo(videoId);
+    const categoryId = await this.resolveCategoryForVideo(videoId);
+    if (!categoryId) return null;
+    const clips = await YTM_Storage.getBookmarksForVideo(categoryId, videoId);
     const idx = clips
       .map((c, i) => [c, i])
       .filter(([c]) => c.startTime != null && c.endTime == null)
@@ -262,14 +296,16 @@ const YTM_Bookmarks = {
     clip.startTime = start;
     clip.endTime = end;
     clip.updatedAt = Date.now();
-    await YTM_Storage.saveBookmarksForVideo(videoId, clips);
+    await YTM_Storage.saveBookmarksForVideo(categoryId, videoId, clips);
     return clip;
   },
 
   async _withClip(id, mutator) {
     const parsed = this.parseId(id);
     if (!parsed) return { ok: false, message: 'Bookmark not found.' };
-    const clips = await YTM_Storage.getBookmarksForVideo(parsed.videoId);
+    const categoryId = await this.resolveCategoryForVideo(parsed.videoId);
+    if (!categoryId) return { ok: false, message: 'Bookmark not found.' };
+    const clips = await YTM_Storage.getBookmarksForVideo(categoryId, parsed.videoId);
     const idx = clips.findIndex((c) => c.createdAt === parsed.createdAt);
     if (idx === -1) return { ok: false, message: 'Bookmark not found.' };
 
@@ -277,7 +313,7 @@ const YTM_Bookmarks = {
     if (result && result.ok === false) return result;
 
     clips[idx].updatedAt = Date.now();
-    await YTM_Storage.saveBookmarksForVideo(parsed.videoId, clips);
+    await YTM_Storage.saveBookmarksForVideo(categoryId, parsed.videoId, clips);
     return { ok: true };
   },
 
@@ -291,7 +327,9 @@ const YTM_Bookmarks = {
     if (currentTime == null) return { ok: false, message: 'Open the video to mark from playback.' };
     const parsed = this.parseId(id);
     if (!parsed) return { ok: false, message: 'Bookmark not found.' };
-    const clips = await YTM_Storage.getBookmarksForVideo(parsed.videoId);
+    const categoryId = await this.resolveCategoryForVideo(parsed.videoId);
+    if (!categoryId) return { ok: false, message: 'Bookmark not found.' };
+    const clips = await YTM_Storage.getBookmarksForVideo(categoryId, parsed.videoId);
     const dup = clips.some(
       (c) => c.createdAt !== parsed.createdAt && c.startTime != null && Math.abs(c.startTime - currentTime) < this.DUP_START_EPSILON
     );
@@ -327,13 +365,24 @@ const YTM_Bookmarks = {
   async remove(id) {
     const parsed = this.parseId(id);
     if (!parsed) return;
-    const clips = await YTM_Storage.getBookmarksForVideo(parsed.videoId);
+    const categoryId = await this.resolveCategoryForVideo(parsed.videoId);
+    if (!categoryId) return;
+    const clips = await YTM_Storage.getBookmarksForVideo(categoryId, parsed.videoId);
     const filtered = clips.filter((c) => c.createdAt !== parsed.createdAt);
-    await YTM_Storage.saveBookmarksForVideo(parsed.videoId, filtered);
+    await YTM_Storage.saveBookmarksForVideo(categoryId, parsed.videoId, filtered);
+  },
+
+  // Deletes every clip for videoId in categoryId outright — used by the
+  // Library page's "Delete selected" bulk action (as opposed to `remove`,
+  // which deletes one clip at a time).
+  async removeVideo(categoryId, videoId) {
+    await YTM_Storage.saveBookmarksForVideo(categoryId, videoId, []);
+    await YTM_Storage.saveVideoTagsForVideo(categoryId, videoId, []);
   },
 
   async applyRawText(videoMeta, text) {
-    await this.rememberVideoMeta(videoMeta.videoId, videoMeta.title, videoMeta.channel);
+    await this.rememberVideoMeta(videoMeta.videoId, videoMeta.title, videoMeta.channel, videoMeta.channelUrl);
+    const categoryId = (await this.resolveCategoryForVideo(videoMeta.videoId)) || YTM_Storage.DEFAULT_CATEGORY_ID;
     const lines = text
       .split('\n')
       .map((l) => l.trim())
@@ -345,6 +394,6 @@ const YTM_Bookmarks = {
       if (!parsed) continue;
       clips.push(this.makeClip(parsed));
     }
-    await YTM_Storage.saveBookmarksForVideo(videoMeta.videoId, clips);
+    await YTM_Storage.saveBookmarksForVideo(categoryId, videoMeta.videoId, clips);
   }
 };

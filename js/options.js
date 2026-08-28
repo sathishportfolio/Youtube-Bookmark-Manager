@@ -32,13 +32,7 @@ async function load() {
   updateGistLink(settings.gistId);
 
   const prefs = await YTM_Storage.getPreferences();
-  document.getElementById('extensionEnabledInput').checked = prefs.extensionEnabled !== false;
   document.getElementById('autosyncEnabledInput').checked = prefs.autosyncEnabled !== false;
-}
-
-async function toggleExtensionEnabled(e) {
-  const prefs = await YTM_Storage.getPreferences();
-  await YTM_Storage.savePreferences({ ...prefs, extensionEnabled: e.target.checked, updatedAt: Date.now() });
 }
 
 async function toggleAutosyncEnabled(e) {
@@ -91,21 +85,29 @@ async function resetFromGist() {
   setDangerStatus('Fetching from Gist…');
   let remote;
   try {
-    remote = await YTM_Gist.fetchData(settings.token, settings.gistId);
+    remote = await YTM_Gist.fetchAll(settings.token, settings.gistId);
   } catch (err) {
     setDangerStatus(`Could not fetch from the Gist (${err.message}). Nothing was changed.`, true);
     return;
   }
 
   await YTM_Storage.clearBookmarkData();
-  await YTM_Storage.saveAllBookmarks(remote.bookmarks);
-  await YTM_Storage.saveLastModifiedByVideoId(remote.lastModifiedByVideoId);
-  await YTM_Storage.saveTags(remote.tags);
-  await YTM_Storage.saveTagsLastModified(remote.tagsLastModified);
-  await YTM_Storage.saveAllVideoTags(remote.videoTags);
-  await YTM_Storage.saveVideoRanks(remote.videoRanks || { ranks: {}, updatedAt: 0 });
-  if (remote.preferences && Object.keys(remote.preferences).length > 0) {
-    await YTM_Storage.savePreferences(remote.preferences);
+  await YTM_Storage.saveCategories(remote.manifest.categories);
+  await YTM_Storage.saveCategoriesLastModified(remote.manifest.categoriesLastModified);
+  if (remote.manifest.preferences && Object.keys(remote.manifest.preferences).length > 0) {
+    await YTM_Storage.savePreferences(remote.manifest.preferences);
+  }
+
+  const videoIds = [];
+  for (const category of remote.manifest.categories) {
+    const data = remote.categoryData[category.id] || YTM_Gist._normalizeCategoryData({});
+    await YTM_Storage.saveAllBookmarks(category.id, data.bookmarks);
+    await YTM_Storage.saveLastModifiedByVideoId(category.id, data.lastModifiedByVideoId);
+    await YTM_Storage.saveTags(category.id, data.tags);
+    await YTM_Storage.saveTagsLastModified(category.id, data.tagsLastModified);
+    await YTM_Storage.saveAllVideoTags(category.id, data.videoTags);
+    await YTM_Storage.saveVideoRanks(category.id, data.videoRanks);
+    videoIds.push(...Object.keys(data.bookmarks));
   }
 
   // clearBookmarkData wipes the local-only videoMeta cache, so titles would
@@ -113,7 +115,6 @@ async function resetFromGist() {
   // visited. Refetch title/channel straight from YouTube (thumbnails are
   // derived from the videoId directly, no caching needed) so the Library
   // shows real names right away.
-  const videoIds = Object.keys(remote.bookmarks || {});
   let refreshed = 0;
   const CONCURRENCY = 5;
   let nextIndex = 0;
@@ -184,24 +185,26 @@ async function deleteDataOnly() {
 
   if (settings.token && settings.gistId) {
     try {
-      const [bookmarks, lastModifiedByVideoId, preferences, tags, tagsLastModified, videoTags, videoRanks] = await Promise.all([
-        YTM_Storage.getAllBookmarks(),
-        YTM_Storage.getLastModifiedByVideoId(),
-        YTM_Storage.getPreferences(),
-        YTM_Storage.getTags(),
-        YTM_Storage.getTagsLastModified(),
-        YTM_Storage.getAllVideoTags(),
-        YTM_Storage.getVideoRanks()
-      ]);
-      await YTM_Gist.pushData(settings.token, settings.gistId, {
-        bookmarks,
-        lastModifiedByVideoId,
-        preferences,
-        tags,
-        tagsLastModified,
-        videoTags,
-        videoRanks
-      });
+      // Need the Gist's current file listing so pushAll can clean up every
+      // now-gone category's old file (it diffs remoteFileNames against the
+      // filenames this push actually expects — see YTM_Gist.pushAll).
+      const remote = await YTM_Gist.fetchAll(settings.token, settings.gistId);
+
+      const categories = await YTM_Storage.getCategories();
+      const categoriesLastModified = await YTM_Storage.getCategoriesLastModified();
+      const preferences = await YTM_Storage.getPreferences();
+      const categoryFiles = {};
+      for (const cat of categories) {
+        categoryFiles[cat.id] = {
+          bookmarks: await YTM_Storage.getAllBookmarks(cat.id),
+          lastModifiedByVideoId: await YTM_Storage.getLastModifiedByVideoId(cat.id),
+          tags: await YTM_Storage.getTags(cat.id),
+          tagsLastModified: await YTM_Storage.getTagsLastModified(cat.id),
+          videoTags: await YTM_Storage.getAllVideoTags(cat.id),
+          videoRanks: await YTM_Storage.getVideoRanks(cat.id)
+        };
+      }
+      await YTM_Gist.pushAll(settings.token, settings.gistId, { categories, categoriesLastModified, preferences }, categoryFiles, remote.remoteFileNames, true);
       await YTM_Storage.saveSettings({ ...settings, lastSyncedAt: Date.now(), lastSyncError: null });
     } catch (err) {
       setDangerStatus(`Local data cleared, but could not update the Gist (${err.message}). Try "⟲ Sync" again once that's resolved.`, true);
@@ -218,12 +221,24 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('saveBtn').addEventListener('click', save);
   document.getElementById('testBtn').addEventListener('click', test);
   document.getElementById('resetFromGistBtn').addEventListener('click', resetFromGist);
-  document.getElementById('extensionEnabledInput').addEventListener('change', toggleExtensionEnabled);
   document.getElementById('autosyncEnabledInput').addEventListener('change', toggleAutosyncEnabled);
   document.getElementById('deleteDataOnlyBtn').addEventListener('click', deleteDataOnly);
   document.getElementById('deleteAllBtn').addEventListener('click', deleteAllData);
   document.getElementById('libraryLink').addEventListener('click', (e) => {
     e.preventDefault();
     chrome.tabs.create({ url: chrome.runtime.getURL('manage.html') });
+  });
+
+  // The token/gistId credentials live in chrome.storage.sync (tied to the
+  // signed-in account, not this device — see YTM_Storage.getCredentials),
+  // so they can arrive here without any local write at all — e.g. this
+  // page sitting open on a fresh device right as its first account sync
+  // catches up. Only refresh the fields the user isn't actively editing,
+  // so an in-progress edit here doesn't get clobbered mid-typing.
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'sync' || !changes.credentials) return;
+    if (document.activeElement !== document.getElementById('tokenInput') && document.activeElement !== document.getElementById('gistIdInput')) {
+      load();
+    }
   });
 });

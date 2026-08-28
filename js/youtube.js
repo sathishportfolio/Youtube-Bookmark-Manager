@@ -17,15 +17,44 @@ const YTM_Youtube = {
       const [{ result }] = await chrome.scripting.executeScript({
         target: { tabId },
         func: () => {
-          const title =
-            document.querySelector('meta[name="title"]')?.content ||
-            document.title.replace(/ - YouTube$/, '');
-          const channel =
-            document.querySelector('link[itemprop="name"]')?.content ||
-            document.querySelector('ytd-channel-name#channel-name a')?.textContent?.trim() ||
+          // Prefer the player's own getVideoData() over <head> meta tags —
+          // on a SPA navigation those tags can briefly still hold the
+          // previous video's title/channel (see js/content.js's
+          // getPlayerVideoData for the same reasoning), causing a
+          // right-click bookmark taken shortly after switching videos to
+          // save the wrong title under the new video's id.
+          const currentUrl = new URL(location.href);
+          const currentVideoId = currentUrl.searchParams.get('v');
+          let title = '';
+          let channel = '';
+          try {
+            const player = document.getElementById('movie_player');
+            const data = player && typeof player.getVideoData === 'function' ? player.getVideoData() : null;
+            if (data && data.video_id === currentVideoId) {
+              title = data.title || '';
+              channel = data.author || '';
+            }
+          } catch {
+            // Fall through to meta tags below.
+          }
+          if (!title) {
+            title =
+              document.querySelector('meta[name="title"]')?.content ||
+              document.title.replace(/ - YouTube$/, '');
+          }
+          if (!channel) {
+            channel =
+              document.querySelector('link[itemprop="name"]')?.content ||
+              document.querySelector('ytd-channel-name#channel-name a')?.textContent?.trim() ||
+              '';
+          }
+          const channelUrlHref =
+            document.querySelector('link[itemprop="url"]')?.href ||
+            document.querySelector('ytd-channel-name#channel-name a')?.href ||
             '';
+          const channelUrl = channelUrlHref ? channelUrlHref.replace(/\/$/, '') : '';
           const video = document.querySelector('video.html5-main-video');
-          return { title, channel, currentTime: video ? video.currentTime : 0 };
+          return { title, channel, channelUrl, currentTime: video ? video.currentTime : 0 };
         }
       });
       return result || { title: '', channel: '', currentTime: 0 };
@@ -49,7 +78,7 @@ const YTM_Youtube = {
       const res = await fetch(oembedUrl);
       if (!res.ok) return null;
       const data = await res.json();
-      return { title: data.title || '', channel: data.author_name || '' };
+      return { title: data.title || '', channel: data.author_name || '', channelUrl: data.author_url || '' };
     } catch {
       return null;
     }

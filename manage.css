@@ -76,36 +76,40 @@ body.manage-page #controls #videoSortSelect {
   color: var(--fg);
   font: inherit;
 }
-#manageTagsBtn.active {
+#selectAllBtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+#tagToggleBtn.active {
   border-color: var(--accent);
   color: var(--accent);
   background: rgba(204, 0, 0, 0.08);
 }
 
-/* Tag manager */
-#tagManager {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 8px;
-  margin-bottom: 10px;
+/* Named sections (Categories, then search/sort + the collapsible tag bar)
+   so the page reads as a few clearly-labeled groups instead of a stack of
+   look-alike control rows. */
+.ytm-section {
+  margin-bottom: 14px;
 }
-.tag-manager-add {
-  display: flex;
-  gap: 6px;
+.ytm-section-label {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+#tagSection {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+#tagSection .tag-manager-controls {
   margin-bottom: 8px;
 }
-.tag-manager-add input {
-  flex: 1;
-  padding: 4px 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg);
-  color: var(--fg);
-  font: inherit;
-}
-.tag-manager-add input.ytm-input-error {
-  border-color: #dc2626;
-}
+
+/* Search/sort above the tag bar (also used to find a tag to rename/delete) */
 .tag-manager-controls {
   display: flex;
   gap: 6px;
@@ -127,9 +131,6 @@ body.manage-page #controls #videoSortSelect {
   background: var(--bg);
   color: var(--fg);
   font: inherit;
-}
-#tagManager .hint {
-  margin: 0 0 8px;
 }
 
 /* Tag chips, shared by manager list, filter bar, and per-video rows */
@@ -156,14 +157,15 @@ body.manage-page #controls #videoSortSelect {
   color: var(--muted);
   cursor: pointer;
   font-size: 10px;
-  padding: 0;
+  padding: 2px 1px 2px 4px;
+  margin-left: 2px;
   line-height: 1;
 }
 .tag-chip-remove:hover {
   color: #dc2626;
 }
 .tag-chip-name {
-  cursor: default;
+  cursor: pointer;
 }
 .tag-rename-input {
   border: 1px solid var(--accent);
@@ -270,4 +272,76 @@ body.manage-page #controls #videoSortSelect {
 .tag-popover-create:hover {
   border-color: var(--accent);
   color: var(--accent);
+}
+
+/* "+ New" chip shared by the category bar and the tag bar */
+.tag-chip-add {
+  border-style: dashed;
+  color: var(--muted);
+  cursor: pointer;
+  background: transparent;
+}
+.tag-chip-add:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.tag-chip-add-input {
+  padding: 0;
+  border-style: dashed;
+  border-color: var(--accent);
+}
+.tag-chip-add-input input {
+  width: 110px;
+  padding: 2px 8px;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 11px;
+}
+.tag-chip-add-input input:focus {
+  outline: none;
+}
+
+/* Bulk selection toolbar */
+.video-select-checkbox {
+  margin-top: 4px;
+  cursor: pointer;
+}
+#bulkToolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 6px 8px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: rgba(204, 0, 0, 0.06);
+}
+#bulkToolbar #bulkCount {
+  font-size: 12px;
+  color: var(--muted);
+  margin-right: auto;
+}
+#bulkToolbar select {
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+}
+.ytm-btn.danger {
+  border-color: #dc2626;
+  color: #dc2626;
+}
+.ytm-btn.danger:hover {
+  background: rgba(220, 38, 38, 0.08);
+}
+
+a.video-channel {
+  text-decoration: none;
+}
+a.video-channel:hover {
+  text-decoration: underline;
 }

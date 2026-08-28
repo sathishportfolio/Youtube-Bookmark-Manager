@@ -16,26 +16,16 @@
   </p>
 
   <section>
-    <h2>In-page panel</h2>
-    <p class="hint">
-      Turn off to hide the bookmark panel, playlist panel, and seek-bar
-      markers on YouTube video pages. Your bookmarks and tags are kept and
-      still sync in the background — this only hides the UI. This
-      preference syncs across your devices, same as Autoplay.
-    </p>
-    <label class="checkbox-row">
-      <input type="checkbox" id="extensionEnabledInput" checked>
-      Show bookmark panel on YouTube
-    </label>
-  </section>
-
-  <section>
     <h2>GitHub Gist sync</h2>
     <p class="hint">
       Create a token at
       <a href="https://github.com/settings/tokens/new?scopes=gist&description=YouTube%20Manager" target="_blank" rel="noopener">github.com/settings/tokens</a>
-      with only the <strong>gist</strong> scope. The token is stored locally in this browser
-      (chrome.storage.local) and is only ever sent to api.github.com.
+      with only the <strong>gist</strong> scope. The token and Gist ID are
+      stored in <code>chrome.storage.sync</code> — tied to your signed-in
+      Chrome/Google account, not just this browser — so signing into the
+      same account on another device or browser fills these in
+      automatically and that device starts pulling your bookmarks from the
+      same Gist. They're only ever sent to api.github.com otherwise.
     </p>
 
     <label>
@@ -78,7 +68,7 @@
       local data here looks wrong and you just want to trust the Gist.
     </p>
     <div class="button-row">
-      <button id="resetFromGistBtn" class="danger">Reset local data &amp; re-sync from Gist</button>
+      <button id="resetFromGistBtn" class="danger">Re-sync with Gist</button>
     </div>
 
     <p class="hint">
@@ -89,7 +79,7 @@
       undone.
     </p>
     <div class="button-row">
-      <button id="deleteDataOnlyBtn" class="danger">Delete data only (keep token &amp; Gist)</button>
+      <button id="deleteDataOnlyBtn" class="danger">Truncate Data (local & gist)</button>
     </div>
 
     <p class="hint">
@@ -98,7 +88,7 @@
       This cannot be undone.
     </p>
     <div class="button-row">
-      <button id="deleteAllBtn" class="danger">Delete all data &amp; Gist</button>
+      <button id="deleteAllBtn" class="danger">Delete all</button>
     </div>
 
     <p id="dangerStatus" class="status" hidden></p>

@@ -1,5 +1,14 @@
 importScripts('storage.js', 'youtube.js', 'bookmarks.js', 'gist.js', 'sync.js');
 
+// Bookmarks/tags/videoTags/videoRanks are now stored per category, as
+// `<base>::<categoryId>` keys (see js/storage.js) rather than one flat key
+// each — chrome.storage.onChanged fires per key, so listeners that used to
+// check e.g. `changes.bookmarks` need to check for any key with that prefix
+// instead.
+function ytmChangedKeyWithPrefix(changes, prefix) {
+  return Object.keys(changes).some((k) => k.startsWith(prefix));
+}
+
 const START_MENU_ID = 'ytm-quick-start';
 const END_MENU_ID = 'ytm-quick-end';
 
@@ -37,7 +46,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.url || changeInfo.status === 'complete') updateEndMenuVisibility(tabId);
 });
 chrome.storage.onChanged.addListener(async (changes, area) => {
-  if (area !== 'local' || !changes.bookmarks) return;
+  if (area !== 'local' || !ytmChangedKeyWithPrefix(changes, 'bookmarks::')) return;
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   if (tab) updateEndMenuVisibility(tab.id);
 });
@@ -77,7 +86,29 @@ async function runAutosync() {
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local' || syncInProgress) return;
-  if (!changes.bookmarks && !changes.tags && !changes.tagsLastModified && !changes.videoTags && !changes.preferences) return;
+  const relevant =
+    ytmChangedKeyWithPrefix(changes, 'bookmarks::') ||
+    ytmChangedKeyWithPrefix(changes, 'tags::') ||
+    ytmChangedKeyWithPrefix(changes, 'tagsLastModified::') ||
+    ytmChangedKeyWithPrefix(changes, 'videoTags::') ||
+    ytmChangedKeyWithPrefix(changes, 'videoRanks::') ||
+    changes.preferences ||
+    changes.categories ||
+    changes.categoriesLastModified;
+  if (!relevant) return;
+  clearTimeout(autosyncTimer);
+  autosyncTimer = setTimeout(runAutosync, AUTOSYNC_DEBOUNCE_MS);
+});
+
+// The token/gistId credentials live in chrome.storage.sync, tied to the
+// browser's signed-in Google account (see YTM_Storage.getCredentials) —
+// on a brand new device signed into that same account, Chrome delivers
+// them here as soon as its own account sync catches up, often before the
+// user ever opens the popup or options page. Kick off a pull right away
+// instead of waiting for the next 5-minute periodic tick, so bookmarks
+// show up as soon as the credentials do.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'sync' || !changes.credentials || syncInProgress) return;
   clearTimeout(autosyncTimer);
   autosyncTimer = setTimeout(runAutosync, AUTOSYNC_DEBOUNCE_MS);
 });
@@ -136,7 +167,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 async function quickStart(videoId, tabId) {
   const meta = await YTM_Youtube.readPageMetadata(tabId);
   await YTM_Bookmarks.addClip(
-    { videoId, title: meta.title, channel: meta.channel },
+    { videoId, title: meta.title, channel: meta.channel, channelUrl: meta.channelUrl },
     { start: meta.currentTime || 0 }
   );
 }

@@ -41,12 +41,51 @@
   let playlistTagFilterQuery = '';
   let playlistTagFilterSort = 'az';
   let playlistPrefsLoaded = false;
+  // Which videos have their clip list expanded — same accordion pattern as
+  // manage.html's Library page (expandedVideoIds there), but per-tab only:
+  // not synced, and reset on page load.
+  const playlistExpandedVideoIds = new Set();
 
   function getVideoEl() {
     return document.querySelector('video.html5-main-video');
   }
 
+  // YouTube's SPA navigation (yt-navigate-finish) fires before <head> meta
+  // tags and document.title actually update — they can lag the new video by
+  // several hundred ms, so reading them right away risks saving the
+  // *previous* video's title/channel under the new video's id. The player
+  // element's own getVideoData() updates as soon as the new video's data
+  // loads and carries its own video_id, so it can be checked against
+  // currentVideoId before being trusted — meta tags are only a fallback for
+  // when the player API isn't available.
+  function getPlayerVideoData() {
+    try {
+      const player = document.getElementById('movie_player');
+      const data = player && typeof player.getVideoData === 'function' ? player.getVideoData() : null;
+      if (data && data.video_id) return { videoId: data.video_id, title: data.title || '', channel: data.author || '' };
+    } catch {
+      // Fall through to the meta-tag based reading below.
+    }
+    return null;
+  }
+
+  // The player API has no notion of a channel URL, so that always comes
+  // from the DOM regardless of whether the title/channel name came from
+  // getPlayerVideoData() or the meta-tag fallback below.
+  function readChannelUrl() {
+    const href =
+      document.querySelector('link[itemprop="url"]')?.href ||
+      document.querySelector('ytd-channel-name#channel-name a')?.href ||
+      '';
+    return href ? href.replace(/\/$/, '') : '';
+  }
+
   function readMetadata() {
+    const channelUrl = readChannelUrl();
+    const playerData = getPlayerVideoData();
+    if (playerData && playerData.videoId === currentVideoId && playerData.title) {
+      return { videoId: currentVideoId, title: playerData.title, channel: playerData.channel, channelUrl };
+    }
     const title =
       document.querySelector('meta[name="title"]')?.content ||
       document.title.replace(/ - YouTube$/, '');
@@ -54,7 +93,25 @@
       document.querySelector('link[itemprop="name"]')?.content ||
       document.querySelector('ytd-channel-name#channel-name a')?.textContent?.trim() ||
       '';
-    return { videoId: currentVideoId, title, channel };
+    return { videoId: currentVideoId, title, channel, channelUrl };
+  }
+
+  // Polls until the player's own video data actually matches the video we
+  // just navigated to (or times out), so setup() doesn't call
+  // rememberVideoMeta with a stale previous-video title read too early
+  // after yt-navigate-finish.
+  function waitForVideoDataMatch(videoId, timeoutMs = 3000, intervalMs = 150) {
+    return new Promise((resolve) => {
+      const deadline = Date.now() + timeoutMs;
+      (function poll() {
+        const data = getPlayerVideoData();
+        if ((data && data.videoId === videoId) || Date.now() >= deadline) {
+          resolve();
+          return;
+        }
+        setTimeout(poll, intervalMs);
+      })();
+    });
   }
 
   async function getBookmarksForCurrentVideo() {
@@ -222,8 +279,14 @@
     return sorted;
   }
 
+  // The playlist panel shows whichever category is currently "active" —
+  // the same per-browser selection the Library page's category bar sets
+  // (YTM_Storage.getActiveCategoryId/saveActiveCategoryId) — so switching
+  // categories in the Library tab is what changes what this panel (and
+  // Autoplay's next-video jump, which walks this panel's list) covers.
   async function getPlaylistGroups() {
-    const groups = await YTM_Bookmarks.getAllVideoGroups();
+    const categoryId = await YTM_Storage.getActiveCategoryId();
+    const groups = await YTM_Bookmarks.getAllVideoGroups(categoryId);
     return sortPlaylistGroups(groups.filter((g) => matchesPlaylistFilter(g, playlistQuery)));
   }
 
@@ -400,7 +463,7 @@
             <span class="ytm-hint"></span>
           </div>
           <div class="ytm-panel-toolbar">
-            <button type="button" class="ytm-btn ytm-btn-autoplay" title="On: Play jumps between bookmarks and stops after the last one. Off: Play just plays the video normally from that point.">Autoplay: On</button>
+            <button type="button" class="ytm-btn ytm-btn-autoplay" title="On: Play jumps between bookmarks and stops after the last one. Off: Play just plays the video normally from that point.">AutoPlay Bookmark: On</button>
             <button type="button" class="ytm-btn ytm-btn-raw" title="Bulk add/edit as text">Raw text</button>
             <button type="button" class="ytm-btn ytm-btn-copy" title="Copy this video's bookmarks as text">Copy all</button>
           </div>
@@ -512,7 +575,7 @@
     const prefs = await YTM_Storage.getPreferences();
 
     const autoplayBtn = panel.querySelector('.ytm-btn-autoplay');
-    if (autoplayBtn) autoplayBtn.textContent = `Autoplay: ${prefs.autoplay === false ? 'Off' : 'On'}`;
+    if (autoplayBtn) autoplayBtn.textContent = `AutoPlay Bookmark: ${prefs.autoplay === false ? 'Off' : 'On'}`;
 
     const body = panel.querySelector('.ytm-panel-body');
     const toggleBtn = panel.querySelector('.ytm-btn-toggle-panel');
@@ -525,7 +588,7 @@
       playlistPanel.hidden = collapsed;
       const playlistAutoplayBtn = playlistPanel.querySelector('.ytm-btn-playlist-autoplay');
       if (playlistAutoplayBtn) {
-        playlistAutoplayBtn.textContent = `Autoplay: ${prefs.autoplay === false ? 'Off' : 'On'}`;
+        playlistAutoplayBtn.textContent = `AutoPlay Bookmark: ${prefs.autoplay === false ? 'Off' : 'On'}`;
       }
     }
   }
@@ -618,8 +681,8 @@
     panel.id = PLAYLIST_PANEL_ID;
     panel.innerHTML = `
       <div class="ytm-panel-toggle-row">
-        <span class="ytm-playlist-label">▶ Playlist</span>
-        <button type="button" class="ytm-btn ytm-btn-playlist-autoplay" title="On: playback stays within bookmarks and auto-advances to the next video in this list when a video finishes. Off: normal playback, no auto-advance.">Autoplay: On</button>
+        <span class="ytm-playlist-label">🔖 YouTube Manager — Playlist</span>
+        <button type="button" class="ytm-btn ytm-btn-playlist-autoplay" title="On: playback stays within bookmarks and auto-advances to the next video in this list when a video finishes. Off: normal playback, no auto-advance.">AutoPlay Bookmark: On</button>
       </div>
       <div class="ytm-playlist-body">
         <div class="ytm-playlist-controls">
@@ -632,19 +695,22 @@
             <option value="rankAsc">Rank (low to high)</option>
             <option value="rankDesc">Rank (high to low)</option>
           </select>
+          <button type="button" class="ytm-btn ytm-btn-playlist-tag-toggle" title="Filter by tag">Tags</button>
         </div>
-        <div class="ytm-playlist-tag-controls">
-          <input type="search" class="ytm-playlist-tag-search" placeholder="Search tags…">
-          <select class="ytm-playlist-tag-sort">
-            <option value="az">A–Z</option>
-            <option value="za">Z–A</option>
-            <option value="modified">Recently Modified</option>
-            <option value="added">Recently Added</option>
-            <option value="tagged">Recently Tagged</option>
-            <option value="mostTagged">Most Tagged</option>
-          </select>
+        <div class="ytm-playlist-tag-section" hidden>
+          <div class="ytm-playlist-tag-controls">
+            <input type="search" class="ytm-playlist-tag-search" placeholder="Search tags…">
+            <select class="ytm-playlist-tag-sort">
+              <option value="az">A–Z</option>
+              <option value="za">Z–A</option>
+              <option value="modified">Recently Modified</option>
+              <option value="added">Recently Added</option>
+              <option value="tagged">Recently Tagged</option>
+              <option value="mostTagged">Most Tagged</option>
+            </select>
+          </div>
+          <div class="ytm-playlist-tag-bar tag-chip-list"></div>
         </div>
-        <div class="ytm-playlist-tag-bar tag-chip-list"></div>
         <ul class="ytm-playlist-list"></ul>
         <p class="ytm-playlist-empty ytm-hint" hidden>No bookmarked videos yet.</p>
       </div>
@@ -652,6 +718,12 @@
 
     panel.querySelector('.ytm-playlist-search').value = playlistQuery;
     panel.querySelector('.ytm-playlist-sort').value = playlistVideoSort;
+    // Start expanded if a tag filter is already active (e.g. restored from
+    // synced preferences) so the active filter is never hidden behind a
+    // closed disclosure; otherwise stay collapsed to keep the default view
+    // to one compact row instead of two full search+sort rows.
+    panel.querySelector('.ytm-playlist-tag-section').hidden = playlistTagFilters.size === 0;
+    panel.querySelector('.ytm-btn-playlist-tag-toggle').classList.toggle('active', playlistTagFilters.size > 0);
 
     panel.querySelector('.ytm-btn-playlist-autoplay').addEventListener('click', toggleAutoplay);
     panel.querySelector('.ytm-playlist-search').addEventListener('input', (e) => {
@@ -663,6 +735,11 @@
       playlistVideoSort = e.target.value;
       renderPlaylist();
       savePlaylistPrefs();
+    });
+    panel.querySelector('.ytm-btn-playlist-tag-toggle').addEventListener('click', () => {
+      const section = panel.querySelector('.ytm-playlist-tag-section');
+      section.hidden = !section.hidden;
+      panel.querySelector('.ytm-btn-playlist-tag-toggle').classList.toggle('active', !section.hidden);
     });
     panel.querySelector('.ytm-playlist-tag-search').addEventListener('input', (e) => {
       playlistTagFilterQuery = e.target.value;
@@ -714,18 +791,28 @@
     const panel = document.getElementById(PLAYLIST_PANEL_ID);
     if (!panel) return;
 
-    const controls = panel.querySelector('.ytm-playlist-tag-controls');
+    const toggleBtn = panel.querySelector('.ytm-btn-playlist-tag-toggle');
+    const section = panel.querySelector('.ytm-playlist-tag-section');
     const bar = panel.querySelector('.ytm-playlist-tag-bar');
-    const allTags = await YTM_Tags.getAllTags();
+    const activeCategoryId = await YTM_Storage.getActiveCategoryId();
+    const allTags = await YTM_Tags.getAllTags(activeCategoryId);
 
-    controls.hidden = allTags.length === 0;
-    bar.hidden = allTags.length === 0;
+    // No tags at all — hide the toggle entirely rather than leaving a
+    // button that opens onto an empty section. Whether the section itself
+    // is open otherwise is left alone here (only the toggle button's click
+    // handler changes that) so a re-render triggered by an unrelated
+    // storage change doesn't silently re-collapse a section the user just
+    // opened.
+    toggleBtn.hidden = allTags.length === 0;
     if (allTags.length === 0) {
+      section.hidden = true;
       bar.replaceChildren();
       return;
     }
+    toggleBtn.textContent = playlistTagFilters.size > 0 ? `Tags (${playlistTagFilters.size})` : 'Tags';
+    toggleBtn.classList.toggle('active', playlistTagFilters.size > 0);
 
-    const sorted = await YTM_Tags.getAllTags(playlistTagFilterSort);
+    const sorted = await YTM_Tags.getAllTags(activeCategoryId, playlistTagFilterSort);
     const query = playlistTagFilterQuery.trim().toLowerCase();
     const filtered = query ? sorted.filter((t) => t.name.toLowerCase().includes(query)) : sorted;
 
@@ -761,7 +848,8 @@
       if (done) return;
       done = true;
       if (Number(input.value) !== group.rank) {
-        await YTM_Bookmarks.setVideoRank(group.videoId, input.value);
+        const categoryId = await YTM_Storage.getActiveCategoryId();
+        await YTM_Bookmarks.setVideoRank(categoryId, group.videoId, input.value);
       }
       renderPlaylist();
     };
@@ -781,6 +869,8 @@
   }
 
   function buildPlaylistItem(group) {
+    const expanded = playlistExpandedVideoIds.has(group.videoId);
+
     const li = document.createElement('li');
     li.className = 'ytm-playlist-item' + (group.videoId === currentVideoId ? ' active' : '');
 
@@ -790,7 +880,13 @@
     const img = document.createElement('img');
     img.src = group.thumbnail;
     img.alt = '';
-    img.className = 'ytm-playlist-thumb';
+    img.className = 'ytm-playlist-thumb ytm-playlist-thumb-toggle';
+    img.title = expanded ? 'Collapse' : 'Expand';
+    img.addEventListener('click', () => {
+      if (playlistExpandedVideoIds.has(group.videoId)) playlistExpandedVideoIds.delete(group.videoId);
+      else playlistExpandedVideoIds.add(group.videoId);
+      renderPlaylist();
+    });
 
     const meta = document.createElement('div');
     meta.className = 'ytm-playlist-meta';
@@ -815,7 +911,22 @@
 
     const sub = document.createElement('div');
     sub.className = 'ytm-playlist-sub';
-    sub.textContent = `${group.channel} · ${group.clips.length} bookmark${group.clips.length === 1 ? '' : 's'}`;
+    // Clickable straight to the channel's Playlists tab when we know its
+    // URL (captured alongside title on the video's own watch page — see
+    // readChannelUrl above); older bookmarks made before that existed
+    // just show plain text until the video is visited again.
+    if (group.channelUrl) {
+      const channelLink = document.createElement('a');
+      channelLink.className = 'ytm-playlist-channel-link';
+      channelLink.href = `${group.channelUrl}/playlists`;
+      channelLink.target = '_blank';
+      channelLink.rel = 'noopener';
+      channelLink.textContent = group.channel;
+      channelLink.addEventListener('click', (e) => e.stopPropagation());
+      sub.append(channelLink, document.createTextNode(` · ${group.clips.length} bookmark${group.clips.length === 1 ? '' : 's'}`));
+    } else {
+      sub.textContent = `${group.channel} · ${group.clips.length} bookmark${group.clips.length === 1 ? '' : 's'}`;
+    }
 
     meta.append(rankBadge, title, sub);
 
@@ -833,6 +944,8 @@
 
     header.append(img, meta);
     li.appendChild(header);
+
+    if (!expanded) return li;
 
     const clipList = document.createElement('ul');
     clipList.className = 'ytm-playlist-clips';
@@ -891,8 +1004,14 @@
     await refreshPreferencesUI();
     await renderPlaylistTagBar();
 
-    const allGroups = await YTM_Bookmarks.getAllVideoGroups();
+    const activeCategoryId = await YTM_Storage.getActiveCategoryId();
+    const allGroups = await YTM_Bookmarks.getAllVideoGroups(activeCategoryId);
     const groups = sortPlaylistGroups(allGroups.filter((g) => matchesPlaylistFilter(g, playlistQuery)));
+
+    const categories = await YTM_Storage.getCategories();
+    const activeCategory = categories.find((c) => c.id === activeCategoryId);
+    panel.querySelector('.ytm-playlist-label').textContent =
+      `🔖 YouTube Manager — ${activeCategory ? activeCategory.name : 'Bookmarks'} (${groups.length})`;
 
     // One atomic swap (build all nodes first, then a single
     // replaceChildren call) instead of a separate clear-then-append —
@@ -1028,8 +1147,9 @@
       return;
     }
 
+    await waitForVideoDataMatch(currentVideoId);
     const meta = readMetadata();
-    YTM_Bookmarks.rememberVideoMeta(currentVideoId, meta.title, meta.channel);
+    YTM_Bookmarks.rememberVideoMeta(currentVideoId, meta.title, meta.channel, meta.channelUrl);
 
     refreshPanel();
     renderPlaylist();
@@ -1061,8 +1181,17 @@
     }
   }
 
+  // Bookmarks/tags/videoTags/videoRanks are stored per category, as
+  // `<base>::<categoryId>` keys (see js/storage.js) — a video could be in
+  // any category, so react to a change under any of them rather than
+  // trying to track which category currentVideoId is in here too.
+  function changedKeyWithPrefix(changes, prefix) {
+    return Object.keys(changes).some((k) => k.startsWith(prefix));
+  }
+
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
+    const bookmarksChanged = changedKeyWithPrefix(changes, 'bookmarks::');
     if (changes.preferences) {
       const wasEnabled = extensionEnabled;
       extensionEnabled = changes.preferences.newValue?.extensionEnabled !== false;
@@ -1076,10 +1205,10 @@
       }
       refreshPreferencesUI();
       syncPlaylistPrefsFromChange(changes.preferences.newValue);
-    } else if (changes.bookmarks || changes.tags || changes.videoTags || changes.videoRanks) {
+    } else if (bookmarksChanged || changedKeyWithPrefix(changes, 'tags::') || changedKeyWithPrefix(changes, 'videoTags::') || changedKeyWithPrefix(changes, 'videoRanks::') || changes.activeCategoryId) {
       renderPlaylist();
     }
-    if (changes.bookmarks) {
+    if (bookmarksChanged) {
       refreshPanel();
       scheduleMarkerRender();
     }

@@ -52,6 +52,8 @@ button:disabled { opacity: 0.5; cursor: default; }
 .sync-dot.error { background: #dc2626; }
 button.danger { color: #dc2626; border-color: #dc2626; }
 .hint { color: var(--muted); font-size: 11px; margin: 4px 0 10px; }
+.checkbox-row { display: flex; align-items: center; gap: 6px; margin: 0 0 10px; font-size: 12px; }
+.checkbox-row input[type="checkbox"] { width: auto; margin: 0; }
 #controls { margin-bottom: 8px; }
 #searchInput { width: 100%; padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--fg); }
 
@@ -64,7 +66,7 @@ button.danger { color: #dc2626; border-color: #dc2626; }
 .video-meta { min-width: 0; flex: 1; }
 .video-meta a { color: var(--fg); text-decoration: none; font-weight: 600; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .video-meta a:hover { text-decoration: underline; }
-.video-channel { color: var(--muted); font-size: 11px; }
+.video-channel { display: block; color: var(--muted); font-size: 11px; }
 
 /* Manual add row */
 .ytm-add-row { display: flex; gap: 6px; margin-bottom: 6px; }

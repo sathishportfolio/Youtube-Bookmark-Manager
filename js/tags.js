@@ -2,16 +2,20 @@ function ytmGenerateTagId() {
   return (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
 }
 
+// Tags are scoped per category — each category has its own independent
+// tag list (see CLAUDE.md) — so every method here takes the categoryId to
+// operate on. Callers (js/manage.js) always pass the Library page's
+// currently-active category.
 const YTM_Tags = {
   // Tag list enriched with usage stats derived from videoTags +
   // lastModifiedByVideoId (count of videos using the tag, and the most
   // recent lastModifiedByVideoId among them, as a proxy for "last tagged"),
   // then sorted per `sortBy`. Defaults to A-Z.
-  async getAllTags(sortBy = 'az') {
+  async getAllTags(categoryId, sortBy = 'az') {
     const [tags, videoTags, lastModifiedByVideoId] = await Promise.all([
-      YTM_Storage.getTags(),
-      YTM_Storage.getAllVideoTags(),
-      YTM_Storage.getLastModifiedByVideoId()
+      YTM_Storage.getTags(categoryId),
+      YTM_Storage.getAllVideoTags(categoryId),
+      YTM_Storage.getLastModifiedByVideoId(categoryId)
     ]);
 
     const withStats = tags.map((tag) => {
@@ -37,28 +41,28 @@ const YTM_Tags = {
     return withStats.sort(sorters[sortBy] || sorters.az);
   },
 
-  async createTag(name) {
+  async createTag(categoryId, name) {
     const trimmed = (name || '').trim();
     if (!trimmed) return { ok: false, message: 'Enter a tag name.' };
-    const tags = await YTM_Storage.getTags();
+    const tags = await YTM_Storage.getTags(categoryId);
     if (tags.some((t) => t.name.toLowerCase() === trimmed.toLowerCase())) {
       return { ok: false, message: 'That tag already exists.' };
     }
     const now = Date.now();
     const tag = { id: ytmGenerateTagId(), name: trimmed, createdAt: now, updatedAt: now };
     tags.push(tag);
-    await YTM_Storage.saveTags(tags);
-    await YTM_Storage.touchTag(tag.id);
+    await YTM_Storage.saveTags(categoryId, tags);
+    await YTM_Storage.touchTag(categoryId, tag.id);
     return { ok: true, id: tag.id, name: tag.name };
   },
 
   // Renames the tag in place (its id — and so every video's assignment to
   // it — never changes), so this can't create a duplicate the way a
   // name-keyed rename could when merged against a stale remote copy.
-  async renameTag(id, newName) {
+  async renameTag(categoryId, id, newName) {
     const trimmed = (newName || '').trim();
     if (!trimmed) return { ok: false, message: 'Enter a tag name.' };
-    const tags = await YTM_Storage.getTags();
+    const tags = await YTM_Storage.getTags(categoryId);
     const tag = tags.find((t) => t.id === id);
     if (!tag) return { ok: false, message: 'Tag not found.' };
     if (
@@ -71,8 +75,8 @@ const YTM_Tags = {
 
     tag.name = trimmed;
     tag.updatedAt = Date.now();
-    await YTM_Storage.saveTags(tags);
-    await YTM_Storage.touchTag(id);
+    await YTM_Storage.saveTags(categoryId, tags);
+    await YTM_Storage.touchTag(categoryId, id);
     return { ok: true };
   },
 
@@ -88,38 +92,38 @@ const YTM_Tags = {
   // synced since before the delete can still resurrect its stale copy on
   // its own next sync — see the comment on mergeTagData. Also unassigns
   // the tag from every video for local tidiness.
-  async deleteTag(id) {
-    const tags = await YTM_Storage.getTags();
+  async deleteTag(categoryId, id) {
+    const tags = await YTM_Storage.getTags(categoryId);
     if (!tags.some((t) => t.id === id)) return;
-    await YTM_Storage.saveTags(tags.filter((t) => t.id !== id));
+    await YTM_Storage.saveTags(categoryId, tags.filter((t) => t.id !== id));
 
-    const lastModified = await YTM_Storage.getTagsLastModified();
+    const lastModified = await YTM_Storage.getTagsLastModified(categoryId);
     delete lastModified[id];
-    await YTM_Storage.saveTagsLastModified(lastModified);
-    await YTM_Storage.addPendingTagDeletion(id);
+    await YTM_Storage.saveTagsLastModified(categoryId, lastModified);
+    await YTM_Storage.addPendingTagDeletion(categoryId, id);
 
-    const videoTags = await YTM_Storage.getAllVideoTags();
+    const videoTags = await YTM_Storage.getAllVideoTags(categoryId);
     for (const [videoId, list] of Object.entries(videoTags)) {
       if (list.includes(id)) {
-        await YTM_Storage.saveVideoTagsForVideo(videoId, list.filter((t) => t !== id));
+        await YTM_Storage.saveVideoTagsForVideo(categoryId, videoId, list.filter((t) => t !== id));
       }
     }
   },
 
-  async getVideoTags(videoId) {
-    return YTM_Storage.getVideoTags(videoId);
+  async getVideoTags(categoryId, videoId) {
+    return YTM_Storage.getVideoTags(categoryId, videoId);
   },
 
-  async toggleVideoTag(videoId, tagId) {
-    const current = await YTM_Storage.getVideoTags(videoId);
+  async toggleVideoTag(categoryId, videoId, tagId) {
+    const current = await YTM_Storage.getVideoTags(categoryId, videoId);
     const updated = current.includes(tagId)
       ? current.filter((t) => t !== tagId)
       : [...current, tagId];
-    await YTM_Storage.saveVideoTagsForVideo(videoId, updated);
+    await YTM_Storage.saveVideoTagsForVideo(categoryId, videoId, updated);
   },
 
-  async removeVideoTag(videoId, tagId) {
-    const current = await YTM_Storage.getVideoTags(videoId);
-    await YTM_Storage.saveVideoTagsForVideo(videoId, current.filter((t) => t !== tagId));
+  async removeVideoTag(categoryId, videoId, tagId) {
+    const current = await YTM_Storage.getVideoTags(categoryId, videoId);
+    await YTM_Storage.saveVideoTagsForVideo(categoryId, videoId, current.filter((t) => t !== tagId));
   }
 };

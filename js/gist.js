@@ -1,5 +1,37 @@
 const YTM_Gist = {
-  FILE_NAME: 'youtube-manager-bookmarks.json',
+  // Pre-category Gists had one file holding everything. New Gists hold a
+  // manifest file (categories + preferences) plus one file per category
+  // (bookmarks/tags/videoTags/lastModifiedByVideoId/videoRanks for that
+  // category only). fetchAll() below migrates a legacy single-file Gist
+  // into that shape in memory; YTM_Sync.run() is what actually pushes the
+  // migration (dropping LEGACY_FILE_NAME) once it has something to push.
+  LEGACY_FILE_NAME: 'youtube-manager-bookmarks.json',
+  MANIFEST_FILE_NAME: 'youtube-manager-manifest.json',
+  CATEGORY_FILE_RE: /^youtube-manager-category-(.+)\.json$/,
+
+  // The category's *name* is the file's identity (not its internal id) so
+  // the Gist stays human-readable — e.g. "Coding Tutorials" becomes
+  // youtube-manager-category-coding-tutorials.json. This only affects the
+  // Gist filename: the stable internal id is still what lastModifiedByVideoId
+  // /videoTags/local storage keys use, so a rename doesn't touch any of
+  // that — YTM_Sync.run() computes filenames from the post-merge name each
+  // time and lets pushAll delete whatever old-named file no longer matches
+  // any current category (see pushAll below), so a rename or delete cleans
+  // up its old file the same way. Two categories landing on the same slug
+  // (e.g. "Music" and "Music!") is exactly what YTM_Categories.create/
+  // rename's uniqueness check (via this same slug) is there to prevent.
+  slugifyCategoryName(name) {
+    const slug = (name || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+    return slug || 'category';
+  },
+
+  categoryFileName(name) {
+    return `youtube-manager-category-${this.slugifyCategoryName(name)}.json`;
+  },
 
   async request(path, token, options = {}) {
     const res = await fetch(`https://api.github.com${path}`, {
@@ -23,41 +55,105 @@ const YTM_Gist = {
     return this.request('/user', token);
   },
 
-  async createGist(token, data) {
+  // manifestData: { categories, categoriesLastModified, preferences }.
+  // categoryFilesById: { [categoryId]: categoryData } — the filename for
+  // each is derived from that id's current name in manifestData.categories.
+  async createGist(token, manifestData, categoryFilesById) {
+    const idToName = new Map(manifestData.categories.map((c) => [c.id, c.name]));
+    const files = { [this.MANIFEST_FILE_NAME]: { content: JSON.stringify(manifestData, null, 2) } };
+    for (const [id, data] of Object.entries(categoryFilesById)) {
+      files[this.categoryFileName(idToName.get(id) || id)] = { content: JSON.stringify(data, null, 2) };
+    }
     const gist = await this.request('/gists', token, {
       method: 'POST',
       body: JSON.stringify({
         description: 'YouTube Manager bookmarks (managed by the YouTube Manager browser extension)',
         public: false,
-        files: { [this.FILE_NAME]: { content: JSON.stringify(data, null, 2) } }
+        files
       })
     });
     return gist.id;
   },
 
-  // Returns { bookmarks, lastModifiedByVideoId, preferences, tags,
-  // tagsLastModified, videoTags, videoRanks } — the gist file holds all of
-  // it so Autoplay, per-video clip data, tags, and video ranks all follow
-  // the user across devices.
-  async fetchData(token, gistId) {
-    const gist = await this.request(`/gists/${gistId}`, token);
-    const file = gist.files[this.FILE_NAME];
-    if (!file) return this._empty();
+  async _readFile(file) {
+    if (!file) return null;
     const content = file.truncated ? await (await fetch(file.raw_url)).text() : file.content;
     try {
-      const data = JSON.parse(content);
-      return {
-        bookmarks: data.bookmarks || {},
-        lastModifiedByVideoId: data.lastModifiedByVideoId || {},
-        preferences: data.preferences || {},
-        tags: this._normalizeTags(data.tags),
-        tagsLastModified: data.tagsLastModified || {},
-        videoTags: data.videoTags || {},
-        videoRanks: data.videoRanks || { ranks: {}, updatedAt: 0 }
-      };
+      return JSON.parse(content);
     } catch {
-      return this._empty();
+      return null;
     }
+  },
+
+  // Returns { manifest: { categories, categoriesLastModified, preferences },
+  // categoryData: { [id]: {bookmarks, lastModifiedByVideoId, tags,
+  // tagsLastModified, videoTags, videoRanks} }, migratedFromLegacy,
+  // remoteFileNames } — remoteFileNames is every file currently in the
+  // Gist, handed to pushAll so it can clean up a stale category file left
+  // behind by a rename or delete (see pushAll below).
+  async fetchAll(token, gistId) {
+    const gist = await this.request(`/gists/${gistId}`, token);
+    const files = gist.files || {};
+    const remoteFileNames = Object.keys(files);
+
+    const manifestRaw = files[this.MANIFEST_FILE_NAME] ? await this._readFile(files[this.MANIFEST_FILE_NAME]) : null;
+    if (manifestRaw) {
+      const categories = Array.isArray(manifestRaw.categories) && manifestRaw.categories.length > 0
+        ? manifestRaw.categories
+        : [{ id: 'default', name: 'Default', createdAt: 0, updatedAt: 0 }];
+
+      // The filename for each category is derived from its *current* name
+      // (from the manifest, the authoritative source), not discovered by
+      // scanning — a stale file left over from an old name is exactly what
+      // pushAll's cleanup is for, not something to read data back from.
+      const categoryData = {};
+      for (const category of categories) {
+        const file = files[this.categoryFileName(category.name)];
+        if (!file) continue;
+        const parsed = await this._readFile(file);
+        if (parsed) categoryData[category.id] = this._normalizeCategoryData(parsed);
+      }
+
+      return {
+        manifest: {
+          categories,
+          categoriesLastModified: manifestRaw.categoriesLastModified || {},
+          preferences: manifestRaw.preferences || {}
+        },
+        categoryData,
+        migratedFromLegacy: false,
+        remoteFileNames
+      };
+    }
+
+    // No manifest yet — either a brand new/empty Gist, or a pre-category
+    // Gist that still only has the single legacy file. Fold the legacy
+    // file's contents into a synthesized Default category so existing
+    // users don't lose anything on first sync after this update.
+    const legacyRaw = files[this.LEGACY_FILE_NAME] ? await this._readFile(files[this.LEGACY_FILE_NAME]) : null;
+    const legacy = legacyRaw || {};
+
+    return {
+      manifest: {
+        categories: [{ id: 'default', name: 'Default', createdAt: 0, updatedAt: 0 }],
+        categoriesLastModified: {},
+        preferences: legacy.preferences || {}
+      },
+      categoryData: { default: this._normalizeCategoryData(legacy) },
+      migratedFromLegacy: !!legacyRaw,
+      remoteFileNames
+    };
+  },
+
+  _normalizeCategoryData(data) {
+    return {
+      bookmarks: data.bookmarks || {},
+      lastModifiedByVideoId: data.lastModifiedByVideoId || {},
+      tags: this._normalizeTags(data.tags),
+      tagsLastModified: data.tagsLastModified || {},
+      videoTags: data.videoTags || {},
+      videoRanks: data.videoRanks || { ranks: {}, updatedAt: 0 }
+    };
   },
 
   // Tags used to sync as a plain string array, then as
@@ -80,24 +176,37 @@ const YTM_Gist = {
       });
   },
 
-  _empty() {
-    return {
-      bookmarks: {},
-      lastModifiedByVideoId: {},
-      preferences: {},
-      tags: [],
-      tagsLastModified: {},
-      videoTags: {},
-      videoRanks: { ranks: {}, updatedAt: 0 }
-    };
-  },
+  // Pushes the manifest plus any changed category files in one PATCH.
+  // categoryFilesById: { [categoryId]: categoryData } — filenames are
+  // derived from each id's current name in manifestData.categories (the
+  // post-merge list, so a rename that just happened on *this* device, or
+  // was just pulled in from another one, is what gets used). Since the
+  // filename itself carries the category's identity, a rename leaves the
+  // old-named file behind unless something removes it — remoteFileNames
+  // (from fetchAll) is diffed against the filenames this push actually
+  // expects to exist, and anything category-shaped left over (an old name,
+  // or a deleted category) is nulled out to delete it. Pass
+  // removeLegacyFile: true once a legacy single-file Gist has been folded
+  // into the new manifest + category shape, so that old file goes away too.
+  async pushAll(token, gistId, manifestData, categoryFilesById, remoteFileNames = [], removeLegacyFile = false) {
+    const idToName = new Map(manifestData.categories.map((c) => [c.id, c.name]));
+    const files = { [this.MANIFEST_FILE_NAME]: { content: JSON.stringify(manifestData, null, 2) } };
+    const expectedFileNames = new Set();
+    for (const [id, data] of Object.entries(categoryFilesById)) {
+      const fileName = this.categoryFileName(idToName.get(id) || id);
+      files[fileName] = { content: JSON.stringify(data, null, 2) };
+      expectedFileNames.add(fileName);
+    }
+    for (const fileName of remoteFileNames) {
+      if (this.CATEGORY_FILE_RE.test(fileName) && !expectedFileNames.has(fileName)) {
+        files[fileName] = null;
+      }
+    }
+    if (removeLegacyFile) files[this.LEGACY_FILE_NAME] = null;
 
-  async pushData(token, gistId, data) {
     await this.request(`/gists/${gistId}`, token, {
       method: 'PATCH',
-      body: JSON.stringify({
-        files: { [this.FILE_NAME]: { content: JSON.stringify(data, null, 2) } }
-      })
+      body: JSON.stringify({ files })
     });
   },
 
@@ -109,6 +218,7 @@ const YTM_Gist = {
   // has the newer lastModifiedByVideoId timestamp for a given video wins
   // that video's clip array AND its tag list together, as one unit — a
   // video's clips and tags always come from the same source/timestamp.
+  // Operates on one category's data at a time.
   mergeVideoData(local, remote) {
     const bookmarks = { ...remote.bookmarks };
     const videoTags = { ...remote.videoTags };
@@ -188,9 +298,74 @@ const YTM_Gist = {
   // rank change cascades a shift across every other video's rank in the
   // affected range, so there's no clean per-video way to merge two
   // devices' ranks the way mergeVideoData does for clips/tags; whichever
-  // device touched ranks more recently wins the entire ranking.
+  // device touched ranks more recently wins the entire ranking (per
+  // category — each category has its own independent ranking).
   mergeVideoRanks(local, remote) {
     if (!remote || (local?.updatedAt || 0) >= (remote.updatedAt || 0)) return local;
     return remote;
+  },
+
+  // Categories merge the same per-id "last modified wins" way tags do
+  // (mergeTagData above) — a category can be "known but absent" (deleted)
+  // rather than just missing. The Default category is guarded back in if
+  // it's ever missing from the result (it should never actually be
+  // deletable — see YTM_Categories.delete — but a merge should never be
+  // the thing that leaves a device with zero categories).
+  mergeCategories(local, remote) {
+    const byId = new Map((remote.categories || []).map((c) => [c.id, c]));
+    const categoriesLastModified = { ...(remote.categoriesLastModified || {}) };
+
+    const localLM = local.categoriesLastModified || {};
+    const remoteLM = remote.categoriesLastModified || {};
+    for (const id of Object.keys(localLM)) {
+      const localTime = localLM[id] || 0;
+      const remoteTime = remoteLM[id] || 0;
+      if (localTime >= remoteTime) {
+        const localCat = (local.categories || []).find((c) => c.id === id);
+        if (localCat) byId.set(id, localCat);
+        else byId.delete(id);
+        categoriesLastModified[id] = localTime;
+      }
+    }
+
+    if (!byId.has('default')) {
+      const now = Date.now();
+      byId.set('default', { id: 'default', name: 'Default', createdAt: now, updatedAt: now });
+    }
+
+    // Guard against two categories converging on the same Gist filename
+    // slug — e.g. two offline devices each created a category named
+    // "Vacation" with different ids, and both synced. Since the filename
+    // *is* the category's identity on the Gist side (see
+    // YTM_Gist.categoryFileName), that would otherwise mean the two ids
+    // silently share one file. YTM_Categories.create/rename block this at
+    // the source on a single device, but can't prevent two devices
+    // colliding independently — so as a last resort here, whichever
+    // category was touched less recently gets "(2)", "(3)", … appended to
+    // its name until it's unique again, and that rename is recorded
+    // (bumped updatedAt/categoriesLastModified) so it propagates on the
+    // next push just like a normal rename would.
+    const categories = [...byId.values()].map((c) => ({ ...c }));
+    const usedSlugs = new Set();
+    const now = Date.now();
+    for (const cat of categories.slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))) {
+      let slug = this.slugifyCategoryName(cat.name);
+      if (!usedSlugs.has(slug)) {
+        usedSlugs.add(slug);
+        continue;
+      }
+      let n = 2;
+      let candidateSlug = this.slugifyCategoryName(`${cat.name} (${n})`);
+      while (usedSlugs.has(candidateSlug)) {
+        n++;
+        candidateSlug = this.slugifyCategoryName(`${cat.name} (${n})`);
+      }
+      cat.name = `${cat.name} (${n})`;
+      cat.updatedAt = now;
+      categoriesLastModified[cat.id] = now;
+      usedSlugs.add(candidateSlug);
+    }
+
+    return { categories, categoriesLastModified };
   }
 };

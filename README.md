@@ -73,8 +73,8 @@ third-party account required beyond GitHub.
   (favorite, mark start/end, edit, save, manual add, raw-text editor, copy
   all) — collapse it the same way. Open it from the popup's **📚 Library**
   button or the link on the Settings page.
-- **Tags** (Library page) — create/delete tags with **🏷 Manage tags**, tag
-  or untag any video from the **🏷** button in its header, and filter the
+- **Tags** (Library page) — create/delete tags via the **Tags** toggle, tag
+  or untag any video from the **Tags** button in its header, and filter the
   video list by one or more tags at once (click to toggle each one; results
   match *any* selected tag). Tags are per video, not per clip.
 - **Gist sync, automatic** — every local change (a clip added/edited/
@@ -246,13 +246,14 @@ This extension isn't on the Chrome Web Store yet — install it unpacked:
    timestamp and label fields to add a clip without touching playback, or
    **Raw text** to bulk add/edit a video's clips as plain text. **Copy
    all** copies that video's clips as the same text format.
-8. Toggle **Autoplay** (synced across your devices) to control whether
-   clicking a clip's start chains into later bookmarks (on) or just plays
-   normally from that point with no jumping or pausing (off).
-9. On the Library page: click **🏷 Manage tags** to create or delete tags;
-   click a video's **🏷** button to check/uncheck which tags apply to it;
-   click any tag chip in the filter bar above the video list to filter by
-   it (click more than one to match any of them; **Clear filter** resets).
+8. Toggle **AutoPlay Bookmark** (synced across your devices) to control
+   whether clicking a clip's start chains into later bookmarks (on) or just
+   plays normally from that point with no jumping or pausing (off).
+9. On the Library page: click **Tags** to open the tag bar, where you can
+   create or delete tags, and click any chip to filter the video list by it
+   (click more than one to match any of them; **Clear filter** resets).
+   Click a video's own **Tags** button in its header to check/uncheck which
+   tags apply to it.
 10. Everything syncs on its own a couple of seconds after you make a
     change — the **⟲ Sync** button is there if you want to force one
     immediately.

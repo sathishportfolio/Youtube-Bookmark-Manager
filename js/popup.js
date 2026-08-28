@@ -107,7 +107,7 @@ async function loadCurrentVideo() {
 
 async function refreshAutoplayButton() {
   const prefs = await YTM_Storage.getPreferences();
-  document.getElementById('autoplayBtn').textContent = `Autoplay: ${prefs.autoplay === false ? 'Off' : 'On'}`;
+  document.getElementById('autoplayBtn').textContent = `AutoPlay Bookmark: ${prefs.autoplay === false ? 'Off' : 'On'}`;
 }
 
 // Green: configured and the last sync attempt (manual, autosync, or the
@@ -124,8 +124,21 @@ async function refreshSyncStatus() {
 
 async function toggleAutoplay() {
   const prefs = await YTM_Storage.getPreferences();
-  await YTM_Storage.savePreferences({ autoplay: prefs.autoplay === false, updatedAt: Date.now() });
+  await YTM_Storage.savePreferences({ ...prefs, autoplay: prefs.autoplay === false, updatedAt: Date.now() });
   await refreshAutoplayButton();
+}
+
+// Hides the in-page bookmark panel, playlist panel, and seek-bar markers
+// on YouTube; bookmarks/tags are kept and still sync. Synced through the
+// Gist like Autoplay (see js/content.js's extensionEnabled check).
+async function refreshExtensionEnabledCheckbox() {
+  const prefs = await YTM_Storage.getPreferences();
+  document.getElementById('extensionEnabledInput').checked = prefs.extensionEnabled !== false;
+}
+
+async function toggleExtensionEnabled(e) {
+  const prefs = await YTM_Storage.getPreferences();
+  await YTM_Storage.savePreferences({ ...prefs, extensionEnabled: e.target.checked, updatedAt: Date.now() });
 }
 
 async function syncNow() {
@@ -138,15 +151,17 @@ async function syncNow() {
   }
   await refreshAutoplayButton();
   await loadCurrentVideo();
-  setStatus('Synced.');
+  setStatus(result.unchanged ? 'Already up to date.' : 'Synced.');
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
   await loadCurrentVideo();
   refreshAutoplayButton();
+  refreshExtensionEnabledCheckbox();
   refreshSyncStatus();
 
   document.getElementById('autoplayBtn').addEventListener('click', toggleAutoplay);
+  document.getElementById('extensionEnabledInput').addEventListener('change', toggleExtensionEnabled);
   document.getElementById('syncBtn').addEventListener('click', syncNow);
   document.getElementById('optionsBtn').addEventListener('click', () => chrome.runtime.openOptionsPage());
   document.getElementById('searchInput').addEventListener('input', renderClipList);
@@ -155,8 +170,18 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   chrome.storage.onChanged.addListener((changes, area) => {
+    // The token/gistId credentials live in chrome.storage.sync (tied to
+    // the signed-in account, not this device — see
+    // YTM_Storage.getCredentials), so they can change without any local
+    // write at all, e.g. arriving from another device.
+    if (area === 'sync' && changes.credentials) refreshSyncStatus();
     if (area !== 'local') return;
-    if (changes.bookmarks) loadCurrentVideo();
+    // Bookmarks are stored per category, as `bookmarks::<categoryId>`
+    // keys (see js/storage.js) — the current video could be in any of
+    // them, so react to a change under any category rather than tracking
+    // which one it's in here too.
+    if (Object.keys(changes).some((k) => k.startsWith('bookmarks::'))) loadCurrentVideo();
+    if (changes.preferences) refreshExtensionEnabledCheckbox();
     if (changes.settings) refreshSyncStatus();
   });
 });

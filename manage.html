@@ -10,59 +10,62 @@
   <header>
     <h1>YouTube Manager — Library</h1>
     <div class="header-actions">
-      <button id="autoplayBtn" title="On: Play jumps between bookmarks and stops after the last one. Off: Play just plays the video normally from that point.">Autoplay: On</button>
+      <button id="autoplayBtn" title="On: Play jumps between bookmarks and stops after the last one. Off: Play just plays the video normally from that point.">AutoPlay Bookmark: On</button>
+      <button id="refreshInfoBtn" title="Refetch title and channel for every bookmarked video from YouTube">🔄 Refresh info</button>
+      <button id="exportBtn" title="Export bookmarks, tags, and preferences to a JSON file">⬇ Export</button>
+      <button id="importBtn" title="Import and merge bookmarks, tags, and preferences from a JSON file">⬆ Import</button>
+      <input type="file" id="importFileInput" accept="application/json" hidden>
       <button id="syncBtn" title="Sync with Gist">⟲ Sync<span id="syncDot" class="sync-dot"></span></button>
       <button id="optionsBtn" title="Settings">⚙</button>
     </div>
   </header>
 
-  <p class="hint">Click a thumbnail to expand a video's bookmarks.</p>
+  <p class="hint">Click a thumbnail to expand a video's bookmarks. Double-click a category or tag to rename it.</p>
 
-  <div id="controls">
-    <input id="searchInput" type="search" placeholder="Search title, channel, label…">
-    <select id="videoSortSelect">
-      <option value="recent">Recently updated</option>
-      <option value="az">Title A–Z</option>
-      <option value="za">Title Z–A</option>
-      <option value="mostClips">Most bookmarks</option>
-      <option value="rankAsc">Rank (low to high)</option>
-      <option value="rankDesc">Rank (high to low)</option>
-    </select>
-    <button id="manageTagsBtn" class="ytm-btn">Manage tags</button>
-  </div>
+  <section class="ytm-section">
+    <h2 class="ytm-section-label">Categories</h2>
+    <div id="categoryBar" class="tag-chip-list"></div>
+  </section>
 
-  <div id="tagManager" hidden>
-    <div class="tag-manager-add">
-      <input id="newTagInput" type="text" placeholder="New tag name" spellcheck="false">
-      <button id="addTagBtn" class="ytm-btn">Add</button>
-    </div>
-    <div class="tag-manager-controls">
-      <input id="tagSearchInput" type="search" placeholder="Search tags…">
-      <select id="tagSortSelect">
-        <option value="az">A–Z</option>
-        <option value="za">Z–A</option>
-        <option value="modified">Recently Modified</option>
-        <option value="added">Recently Added</option>
-        <option value="tagged">Recently Tagged</option>
-        <option value="mostTagged">Most Tagged</option>
+  <section class="ytm-section">
+    <div id="controls">
+      <input id="searchInput" type="search" placeholder="Search title, channel, label…">
+      <select id="videoSortSelect">
+        <option value="recent">Recently updated</option>
+        <option value="az">Title A–Z</option>
+        <option value="za">Title Z–A</option>
+        <option value="mostClips">Most bookmarks</option>
+        <option value="rankAsc">Rank (low to high)</option>
+        <option value="rankDesc">Rank (high to low)</option>
       </select>
+      <button id="tagToggleBtn" class="ytm-btn" title="Filter or manage tags">Tags</button>
+      <button id="selectAllBtn" class="ytm-btn" title="Select every video currently shown (respects search + tag filter)">Select all</button>
     </div>
-    <p class="hint">Double-click a tag to rename it.</p>
-    <div id="tagManagerList" class="tag-chip-list"></div>
-  </div>
 
-  <div id="tagFilterControls" class="tag-manager-controls" hidden>
-    <input id="tagFilterSearchInput" type="search" placeholder="Search tags…">
-    <select id="tagFilterSortSelect">
-      <option value="az">A–Z</option>
-      <option value="za">Z–A</option>
-      <option value="modified">Recently Modified</option>
-      <option value="added">Recently Added</option>
-      <option value="tagged">Recently Tagged</option>
-      <option value="mostTagged">Most Tagged</option>
-    </select>
+    <div id="tagSection" hidden>
+      <div id="tagControls" class="tag-manager-controls">
+        <input id="tagSearchInput" type="search" placeholder="Search tags…">
+        <select id="tagSortSelect">
+          <option value="az">A–Z</option>
+          <option value="za">Z–A</option>
+          <option value="modified">Recently Modified</option>
+          <option value="added">Recently Added</option>
+          <option value="tagged">Recently Tagged</option>
+          <option value="mostTagged">Most Tagged</option>
+        </select>
+      </div>
+      <div id="tagBar" class="tag-chip-list"></div>
+    </div>
+  </section>
+
+  <div id="bulkToolbar" class="group-toolbar" hidden>
+    <span id="bulkCount"></span>
+    <select id="bulkMoveSelect"></select>
+    <button id="bulkMoveBtn" class="ytm-btn">Move</button>
+    <button id="bulkExportBtn" class="ytm-btn" title="Export the selected videos to a JSON file">Export selected</button>
+    <button id="bulkDeleteBtn" class="ytm-btn danger">Delete selected</button>
+    <button id="bulkClearBtn" class="ytm-btn">Clear selection</button>
   </div>
-  <div id="tagFilterBar" class="tag-chip-list" hidden></div>
 
   <div id="videoList"></div>
   <p id="emptyState" class="hint" hidden>No bookmarks yet.</p>
@@ -72,7 +75,9 @@
   <script src="js/gist.js"></script>
   <script src="js/sync.js"></script>
   <script src="js/youtube.js"></script>
+  <script src="js/importExport.js"></script>
   <script src="js/bookmarks.js"></script>
+  <script src="js/categories.js"></script>
   <script src="js/tags.js"></script>
   <script src="js/row.js"></script>
   <script src="js/manage.js"></script>

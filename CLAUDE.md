@@ -106,13 +106,13 @@ to work from.
   plus a `videoId -> tagId[]` map (`YTM_Storage.getAllVideoTags`/
   `getVideoTags`) — videos reference tags by `id`, never by name, so a
   rename never has to touch every video's assignments. Library-page-only
-  UI: create/rename/delete tags and search/sort them ("🏷 Manage tags" —
+  UI: create/rename/delete tags and search/sort them (the "Tags" toggle —
   sort by A–Z, Z–A, Recently Modified, Recently Added, Recently Tagged, or
   Most Tagged, the last two derived on the fly from `videoTags` +
   `lastModifiedByVideoId` rather than stored); the same search/sort pair
   also sits directly above the always-visible tag filter bar (independent
   state — one finds a tag to rename/delete, the other finds a tag to
-  filter videos by). Toggle a tag on a video from its header's 🏷 popover
+  filter videos by). Toggle a tag on a video from its header's "Tags" popover
   (searchable, multi-select checkboxes, with inline "+ Create" for a new
   tag), remove a tag directly from its chip on the video header, and
   filter the video list by one or more tags (any-match).
