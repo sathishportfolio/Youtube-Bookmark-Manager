@@ -4,6 +4,13 @@
   const MARKER_LAYER_ID = 'ytm-marker-layer';
   const TOOLTIP_ID = 'ytm-tooltip';
 
+  // Whether the in-page UI (panels + seek-bar markers) is allowed to
+  // exist on this page at all — the `extensionEnabled` preference (synced
+  // through the Gist like Autoplay). injectPanel/injectPlaylistPanel/
+  // ensureMarkerLayer all check this and no-op when it's false, so every
+  // caller (setup, the mutation-observer presence check, storage-change
+  // re-renders) naturally stays hidden without needing its own check.
+  let extensionEnabled = true;
   let currentVideoId = null;
   let video = null;
   let observer = null;
@@ -360,6 +367,7 @@
   }
 
   function injectPanel() {
+    if (!extensionEnabled) return null;
     const existing = document.getElementById(PANEL_ID);
     if (existing) return existing;
 
@@ -372,6 +380,11 @@
     panel.innerHTML = `
       <div class="ytm-panel-toggle-row">
         <button type="button" class="ytm-btn ytm-btn-toggle-panel">🔖 Bookmarks ▾</button>
+        <div class="ytm-panel-toggle-actions">
+          <button type="button" class="ytm-btn ytm-btn-library" title="Open the full Library page">📚 Library</button>
+          <button type="button" class="ytm-btn ytm-btn-sync" title="Sync now">⟲ Sync</button>
+          <button type="button" class="ytm-btn ytm-btn-settings" title="Open Settings">⚙️ Settings</button>
+        </div>
       </div>
       <div class="ytm-panel-body">
         <div class="ytm-panel-header">
@@ -406,6 +419,13 @@
     panel.querySelector('.ytm-btn-autoplay').addEventListener('click', toggleAutoplay);
     panel.querySelector('.ytm-btn-raw').addEventListener('click', toggleRawEditor);
     panel.querySelector('.ytm-btn-copy').addEventListener('click', copyAllBookmarks);
+    panel.querySelector('.ytm-btn-library').addEventListener('click', () => {
+      chrome.runtime.sendMessage({ type: 'ytm-open-library' });
+    });
+    panel.querySelector('.ytm-btn-settings').addEventListener('click', () => {
+      chrome.runtime.sendMessage({ type: 'ytm-open-settings' });
+    });
+    panel.querySelector('.ytm-btn-sync').addEventListener('click', syncNow);
 
     const addInput = panel.querySelector('.ytm-add-input');
     const addLabelInput = panel.querySelector('.ytm-add-label-input');
@@ -447,6 +467,31 @@
     const prefs = await YTM_Storage.getPreferences();
     await YTM_Storage.savePreferences({ ...prefs, autoplay: prefs.autoplay === false, updatedAt: Date.now() });
     await refreshPreferencesUI();
+  }
+
+  // Runs a manual sync via the background script (it owns chrome.tabs /
+  // the Gist API), same YTM_Sync.run() used by autosync — bookmarks/tags
+  // are re-rendered by the storage.onChanged listener below once the
+  // merge writes land, so this just handles the button's own state.
+  async function syncNow() {
+    const panel = document.getElementById(PANEL_ID);
+    const btn = panel?.querySelector('.ytm-btn-sync');
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = '⟲ Syncing…';
+    }
+    const result = await chrome.runtime.sendMessage({ type: 'ytm-sync-now' });
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = result && !result.ok ? '⟲ Sync failed' : '⟲ Sync';
+      if (result && !result.ok) {
+        btn.title = result.message || 'Sync failed.';
+        setTimeout(() => {
+          btn.textContent = '⟲ Sync';
+          btn.title = 'Sync now';
+        }, 2500);
+      }
+    }
   }
 
   async function togglePanelCollapsed() {
@@ -556,6 +601,7 @@
   // --- playlist panel -----------------------------------------------------
 
   function injectPlaylistPanel() {
+    if (!extensionEnabled) return null;
     const existing = document.getElementById(PLAYLIST_PANEL_ID);
     if (existing) return existing;
 
@@ -804,6 +850,7 @@
   // --- seek bar markers ---------------------------------------------------
 
   function ensureMarkerLayer() {
+    if (!extensionEnabled) return null;
     const bar = document.querySelector('.ytp-progress-bar-container');
     if (!bar) return null;
     if (getComputedStyle(bar).position === 'static') {
@@ -910,7 +957,11 @@
     });
   }
 
-  function setup() {
+  async function setup() {
+    const prefs = await YTM_Storage.getPreferences();
+    extensionEnabled = prefs.extensionEnabled !== false;
+    if (!extensionEnabled) return;
+
     currentVideoId = YTM_Youtube.extractVideoId(location.href);
     if (!currentVideoId) return;
     video = getVideoEl();
@@ -956,15 +1007,25 @@
 
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
-    if (changes.bookmarks) {
-      refreshPanel();
-      scheduleMarkerRender();
-    }
     if (changes.preferences) {
+      const wasEnabled = extensionEnabled;
+      extensionEnabled = changes.preferences.newValue?.extensionEnabled !== false;
+      if (wasEnabled && !extensionEnabled) {
+        teardown();
+        return;
+      }
+      if (!wasEnabled && extensionEnabled) {
+        setup();
+        return;
+      }
       refreshPreferencesUI();
       syncPlaylistPrefsFromChange(changes.preferences.newValue);
     } else if (changes.bookmarks || changes.tags || changes.videoTags) {
       renderPlaylist();
+    }
+    if (changes.bookmarks) {
+      refreshPanel();
+      scheduleMarkerRender();
     }
   });
 

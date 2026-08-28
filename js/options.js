@@ -30,6 +30,20 @@ async function load() {
     ? `Last synced: ${new Date(settings.lastSyncedAt).toLocaleString()}`
     : 'Never synced yet.';
   updateGistLink(settings.gistId);
+
+  const prefs = await YTM_Storage.getPreferences();
+  document.getElementById('extensionEnabledInput').checked = prefs.extensionEnabled !== false;
+  document.getElementById('autosyncEnabledInput').checked = prefs.autosyncEnabled !== false;
+}
+
+async function toggleExtensionEnabled(e) {
+  const prefs = await YTM_Storage.getPreferences();
+  await YTM_Storage.savePreferences({ ...prefs, extensionEnabled: e.target.checked, updatedAt: Date.now() });
+}
+
+async function toggleAutosyncEnabled(e) {
+  const prefs = await YTM_Storage.getPreferences();
+  await YTM_Storage.savePreferences({ ...prefs, autosyncEnabled: e.target.checked, updatedAt: Date.now() });
 }
 
 async function save() {
@@ -92,10 +106,35 @@ async function resetFromGist() {
   if (remote.preferences && Object.keys(remote.preferences).length > 0) {
     await YTM_Storage.savePreferences(remote.preferences);
   }
+
+  // clearBookmarkData wipes the local-only videoMeta cache, so titles would
+  // otherwise fall back to the raw videoId until each video's page is next
+  // visited. Refetch title/channel straight from YouTube (thumbnails are
+  // derived from the videoId directly, no caching needed) so the Library
+  // shows real names right away.
+  const videoIds = Object.keys(remote.bookmarks || {});
+  let refreshed = 0;
+  const CONCURRENCY = 5;
+  let nextIndex = 0;
+  async function refreshWorker() {
+    while (nextIndex < videoIds.length) {
+      const videoId = videoIds[nextIndex++];
+      const meta = await YTM_Youtube.fetchVideoMetadata(videoId);
+      if (meta && (meta.title || meta.channel)) {
+        await YTM_Storage.saveVideoMeta(videoId, meta);
+      }
+      refreshed++;
+      setDangerStatus(`Refreshing video info from YouTube… (${refreshed}/${videoIds.length})`);
+    }
+  }
+  if (videoIds.length > 0) {
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, videoIds.length) }, refreshWorker));
+  }
+
   await YTM_Storage.saveSettings({ ...settings, lastSyncedAt: Date.now(), lastSyncError: null });
 
   await load();
-  setDangerStatus('Local data replaced with the contents of the Gist.');
+  setDangerStatus('Local data replaced with the contents of the Gist, and video titles/thumbnails refreshed from YouTube.');
 }
 
 async function deleteAllData() {
@@ -176,6 +215,8 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('saveBtn').addEventListener('click', save);
   document.getElementById('testBtn').addEventListener('click', test);
   document.getElementById('resetFromGistBtn').addEventListener('click', resetFromGist);
+  document.getElementById('extensionEnabledInput').addEventListener('change', toggleExtensionEnabled);
+  document.getElementById('autosyncEnabledInput').addEventListener('change', toggleAutosyncEnabled);
   document.getElementById('deleteDataOnlyBtn').addEventListener('click', deleteDataOnly);
   document.getElementById('deleteAllBtn').addEventListener('click', deleteAllData);
   document.getElementById('libraryLink').addEventListener('click', (e) => {

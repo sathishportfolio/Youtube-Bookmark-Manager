@@ -16,6 +16,20 @@
   </p>
 
   <section>
+    <h2>In-page panel</h2>
+    <p class="hint">
+      Turn off to hide the bookmark panel, playlist panel, and seek-bar
+      markers on YouTube video pages. Your bookmarks and tags are kept and
+      still sync in the background — this only hides the UI. This
+      preference syncs across your devices, same as Autoplay.
+    </p>
+    <label class="checkbox-row">
+      <input type="checkbox" id="extensionEnabledInput" checked>
+      Show bookmark panel on YouTube
+    </label>
+  </section>
+
+  <section>
     <h2>GitHub Gist sync</h2>
     <p class="hint">
       Create a token at
@@ -33,6 +47,15 @@
       Gist ID <span class="hint">(leave blank to create a new private gist on first sync)</span>
       <input type="text" id="gistIdInput" placeholder="auto-created on first sync">
     </label>
+
+    <label class="checkbox-row">
+      <input type="checkbox" id="autosyncEnabledInput" checked>
+      Sync automatically (on every change, and every 5 minutes)
+    </label>
+    <p class="hint">
+      Turn off to only sync when you click "⟲ Sync" yourself. This
+      preference syncs across your devices too.
+    </p>
 
     <div class="button-row">
       <button id="testBtn">Test connection</button>
@@ -83,6 +106,7 @@
 
   <script src="js/storage.js"></script>
   <script src="js/gist.js"></script>
+  <script src="js/youtube.js"></script>
   <script src="js/options.js"></script>
 </body>
 </html>

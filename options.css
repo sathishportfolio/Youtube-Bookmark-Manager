@@ -18,6 +18,8 @@ input[type="text"] {
   color: var(--fg);
 }
 .button-row { display: flex; gap: 8px; align-items: center; margin-top: 12px; }
+.checkbox-row { display: flex; align-items: center; gap: 8px; }
+.checkbox-row input[type="checkbox"] { width: auto; margin: 0; }
 a { color: var(--accent); }
 .button-link { font-size: 12px; text-decoration: none; }
 .button-link:hover { text-decoration: underline; }

@@ -1,3 +1,10 @@
+#ytm-panel,
+#ytm-panel *,
+#ytm-playlist-panel,
+#ytm-playlist-panel * {
+  box-sizing: border-box;
+}
+
 #ytm-panel {
   margin: 8px 0 12px;
   padding: 10px 12px;
@@ -6,10 +13,24 @@
   background: var(--yt-spec-badge-chip-background, rgba(128, 128, 128, 0.08));
   font: 13px/1.4 Roboto, Arial, sans-serif;
   color: var(--yt-spec-text-primary, inherit);
+  max-width: 100%;
+  overflow-x: hidden;
 }
 
 .ytm-panel-toggle-row {
   display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.ytm-panel-toggle-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 .ytm-panel-body {
   margin-top: 8px;
@@ -55,10 +76,12 @@
   display: flex;
   gap: 8px;
   margin-top: 8px;
+  min-width: 0;
 }
 .ytm-add-input,
 .ytm-add-label-input {
   flex: 1;
+  min-width: 0;
   border: 1px solid var(--yt-spec-10-percent-layer, rgba(128, 128, 128, 0.3));
   border-radius: 6px;
   padding: 5px 8px;
@@ -109,6 +132,7 @@
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
+  min-width: 0;
 }
 .ytm-icon-btn {
   border: 1px solid var(--yt-spec-10-percent-layer, rgba(128, 128, 128, 0.3));
@@ -241,6 +265,8 @@
   background: var(--yt-spec-badge-chip-background, rgba(128, 128, 128, 0.08));
   font: 13px/1.4 Roboto, Arial, sans-serif;
   color: var(--yt-spec-text-primary, inherit);
+  max-width: 100%;
+  overflow-x: hidden;
 }
 .ytm-playlist-label {
   font-weight: 500;
@@ -259,10 +285,12 @@
   display: flex;
   gap: 8px;
   margin-top: 8px;
+  min-width: 0;
 }
 .ytm-playlist-search,
 .ytm-playlist-tag-search {
   flex: 1;
+  min-width: 0;
   border: 1px solid var(--yt-spec-10-percent-layer, rgba(128, 128, 128, 0.3));
   border-radius: 6px;
   padding: 5px 8px;
@@ -272,6 +300,9 @@
 }
 .ytm-playlist-sort,
 .ytm-playlist-tag-sort {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
   border: 1px solid var(--yt-spec-10-percent-layer, rgba(128, 128, 128, 0.3));
   border-radius: 6px;
   padding: 5px 6px;
@@ -323,6 +354,7 @@
   gap: 10px;
   max-height: 480px;
   overflow-y: auto;
+  overflow-x: hidden;
 }
 .ytm-playlist-item {
   border-top: 1px solid var(--yt-spec-10-percent-layer, rgba(128, 128, 128, 0.2));
@@ -337,6 +369,7 @@
 .ytm-playlist-item-header {
   display: flex;
   gap: 8px;
+  min-width: 0;
 }
 .ytm-playlist-thumb {
   width: 80px;
@@ -367,6 +400,9 @@
   color: var(--yt-spec-text-secondary, #909090);
   font-size: 11px;
   margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .ytm-playlist-tags {
   display: flex;

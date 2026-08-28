@@ -203,6 +203,8 @@ const YTM_Storage = {
   async getPreferences() {
     return this._get('preferences', {
       autoplay: true,
+      autosyncEnabled: true,
+      extensionEnabled: true,
       panelCollapsed: false,
       playlistQuery: '',
       playlistSort: 'recent',

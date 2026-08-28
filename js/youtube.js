@@ -38,6 +38,23 @@ const YTM_Youtube = {
     return `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
   },
 
+  // Title/channel for a video with no open tab to scrape (e.g. after a
+  // Gist reset, for videos not currently playing anywhere) via YouTube's
+  // public oEmbed endpoint — no API key needed. Returns null on failure
+  // (deleted/private video, network error) so callers can fall back to
+  // the videoId as the display title.
+  async fetchVideoMetadata(videoId) {
+    try {
+      const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(`https://www.youtube.com/watch?v=${videoId}`)}&format=json`;
+      const res = await fetch(oembedUrl);
+      if (!res.ok) return null;
+      const data = await res.json();
+      return { title: data.title || '', channel: data.author_name || '' };
+    } catch {
+      return null;
+    }
+  },
+
   formatTime(seconds) {
     if (seconds == null || Number.isNaN(seconds)) return '';
     const total = Math.max(0, Math.floor(seconds));

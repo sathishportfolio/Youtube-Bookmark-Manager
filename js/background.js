@@ -63,6 +63,8 @@ let syncInProgress = false;
 
 async function runAutosync() {
   if (syncInProgress) return;
+  const prefs = await YTM_Storage.getPreferences();
+  if (prefs.autosyncEnabled === false) return;
   syncInProgress = true;
   try {
     await YTM_Sync.run();
@@ -96,6 +98,39 @@ chrome.runtime.onStartup.addListener(() => {
 });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === PERIODIC_SYNC_ALARM) runAutosync();
+});
+
+// --- messages from content scripts --------------------------------------
+//
+// The in-page panel's Library/Sync/Settings buttons need chrome.tabs and
+// chrome.runtime.openOptionsPage, neither of which is available to content
+// scripts — they route through here instead. Sync reuses the same
+// syncInProgress guard as autosync so a manual click can't race a
+// debounced/periodic run.
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === 'ytm-open-library') {
+    chrome.tabs.create({ url: chrome.runtime.getURL('manage.html') });
+    return;
+  }
+  if (message?.type === 'ytm-open-settings') {
+    chrome.runtime.openOptionsPage();
+    return;
+  }
+  if (message?.type === 'ytm-sync-now') {
+    if (syncInProgress) {
+      sendResponse({ ok: false, message: 'A sync is already in progress.' });
+      return;
+    }
+    syncInProgress = true;
+    YTM_Sync.run()
+      .then(sendResponse)
+      .finally(() => {
+        setTimeout(() => {
+          syncInProgress = false;
+        }, AUTOSYNC_SETTLE_MS);
+      });
+    return true;
+  }
 });
 
 async function quickStart(videoId, tabId) {
