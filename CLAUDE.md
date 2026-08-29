@@ -72,9 +72,12 @@ to work from.
   (`YTM_Storage.setPendingPlay` + `js/content.js`'s `initializePlayback`)
   but navigates the current tab there via `location.href` instead of
   opening a new tab. The panel has its own Autoplay toggle button (same
-  synced preference as the bookmarks panel's) but no collapse control of
-  its own — it shows/hides together with the bookmarks panel, driven by
-  the same synced `panelCollapsed` preference (see `refreshPreferencesUI`).
+  synced preference as the bookmarks panel's) and its own collapse toggle,
+  independent of the bookmarks panel's — each is driven by its own
+  Gist-synced preference (`panelCollapsed` for the bookmarks panel,
+  `playlistCollapsed` for this one; see `refreshPreferencesUI`,
+  `togglePanelCollapsed`/`togglePlaylistCollapsed`), so hiding one leaves
+  the other's visibility untouched.
   Autoplay's next-video jump (above) walks this panel's current
   filtered/sorted list, so filtering the playlist by tag also scopes what
   Autoplay treats as "next." The search text, sort mode, and tag-filter
@@ -152,6 +155,7 @@ Bookmarks sync as one JSON file per Gist, shaped exactly like this
   "preferences": {
     "autoplay": true,
     "panelCollapsed": false,
+    "playlistCollapsed": false,
     "playlistQuery": "",
     "playlistSort": "recent",
     "playlistTagFilters": ["a1b2"],

@@ -262,7 +262,7 @@ const YTM_Bookmarks = {
 
   async addClip(videoMeta, { start, end = null, label = '', favorite = false }) {
     await this.rememberVideoMeta(videoMeta.videoId, videoMeta.title, videoMeta.channel, videoMeta.channelUrl);
-    const categoryId = (await this.resolveCategoryForVideo(videoMeta.videoId)) || YTM_Storage.DEFAULT_CATEGORY_ID;
+    const categoryId = (await this.resolveCategoryForVideo(videoMeta.videoId)) || (await YTM_Storage.getActiveCategoryId());
     const clips = await YTM_Storage.getBookmarksForVideo(categoryId, videoMeta.videoId);
     const clip = this.makeClip({ start, end, label, favorite });
     clips.push(clip);
@@ -382,7 +382,7 @@ const YTM_Bookmarks = {
 
   async applyRawText(videoMeta, text) {
     await this.rememberVideoMeta(videoMeta.videoId, videoMeta.title, videoMeta.channel, videoMeta.channelUrl);
-    const categoryId = (await this.resolveCategoryForVideo(videoMeta.videoId)) || YTM_Storage.DEFAULT_CATEGORY_ID;
+    const categoryId = (await this.resolveCategoryForVideo(videoMeta.videoId)) || (await YTM_Storage.getActiveCategoryId());
     const lines = text
       .split('\n')
       .map((l) => l.trim())

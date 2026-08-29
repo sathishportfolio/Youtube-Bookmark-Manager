@@ -124,6 +124,7 @@ button.danger { color: #dc2626; border-color: #dc2626; }
 }
 .ytm-icon-btn:hover { background: rgba(128, 128, 128, 0.1); }
 .ytm-icon-btn:disabled { opacity: 0.4; cursor: default; }
+.ytm-mark-btn { padding: 3px 6px; min-width: 18px; font-size: 13px; font-weight: 700; line-height: 1; }
 .ytm-star { color: var(--muted); }
 .ytm-star.active { color: #f5b400; }
 .ytm-icon-btn.dirty,
@@ -147,7 +148,7 @@ button.danger { color: #dc2626; border-color: #dc2626; }
 }
 .ytm-time-link:hover { background: rgba(128, 128, 128, 0.1); border-radius: 4px; }
 .ytm-arrow { color: var(--muted); font-size: 11px; }
-.ytm-duration { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.ytm-duration { color: var(--muted); font-size: 8px; white-space: nowrap; }
 .ytm-range-input {
   width: 92px;
   border: 1px solid var(--border);

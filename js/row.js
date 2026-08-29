@@ -70,11 +70,16 @@ const YTM_Row = {
     rangeInput.placeholder = '1:10 or 1:10-2:00';
     rangeInput.hidden = true;
 
+    const labelText = document.createElement('span');
+    labelText.className = 'ytm-label-text';
+    labelText.textContent = bookmark.label || '';
+
     const notesInput = document.createElement('input');
     notesInput.type = 'text';
     notesInput.className = 'ytm-notes-input';
     notesInput.placeholder = 'Label';
     notesInput.value = bookmark.label || '';
+    notesInput.hidden = true;
 
     const originalRange = rangeInput.value;
     const originalNotes = notesInput.value;
@@ -106,9 +111,9 @@ const YTM_Row = {
 
     const startBtn = document.createElement('button');
     startBtn.type = 'button';
-    startBtn.className = 'ytm-icon-btn';
+    startBtn.className = 'ytm-icon-btn ytm-mark-btn';
     startBtn.title = 'Mark start at current playback time';
-    startBtn.textContent = '⏮';
+    startBtn.textContent = '[';
     startBtn.disabled = !actions.canMarkTime;
     startBtn.addEventListener('click', async () => {
       showResult(await actions.onMarkStart(bookmark));
@@ -116,9 +121,9 @@ const YTM_Row = {
 
     const endBtn = document.createElement('button');
     endBtn.type = 'button';
-    endBtn.className = 'ytm-icon-btn';
+    endBtn.className = 'ytm-icon-btn ytm-mark-btn';
     endBtn.title = 'Mark end at current playback time';
-    endBtn.textContent = '⏭';
+    endBtn.textContent = ']';
     endBtn.disabled = !actions.canMarkTime;
     endBtn.addEventListener('click', async () => {
       showResult(await actions.onMarkEnd(bookmark));
@@ -134,6 +139,9 @@ const YTM_Row = {
       editing = !editing;
       rangeDisplay.hidden = editing;
       rangeInput.hidden = !editing;
+      labelText.hidden = editing;
+      notesInput.hidden = !editing;
+      saveBtn.hidden = !editing;
       if (editing) {
         rangeInput.focus();
         rangeInput.select();
@@ -145,6 +153,7 @@ const YTM_Row = {
     saveBtn.className = 'ytm-icon-btn';
     saveBtn.title = 'Save range and label';
     saveBtn.textContent = '💾';
+    saveBtn.hidden = true;
     const save = async () => {
       showResult(await actions.onSave(bookmark, rangeInput.value, notesInput.value));
     };
@@ -167,12 +176,13 @@ const YTM_Row = {
     topRow.className = 'ytm-row-top';
     topRow.append(
       star,
-      editBtn,
       rangeDisplay,
       rangeInput,
+      labelText,
+      notesInput,
       startBtn,
       endBtn,
-      notesInput,
+      editBtn,
       saveBtn,
       deleteBtn
     );

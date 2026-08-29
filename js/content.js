@@ -21,6 +21,12 @@
   let playQueueHandler = null;
   let videoEndedHandler = null;
 
+  // Keyboard-shortcut state (see handleShortcutStart below): true only when
+  // the most recently opened pending clip was started via ',' rather than
+  // '/', since only a ','-started clip auto-closes on the next '/'/','.
+  // Purely in-memory/per-tab, reset on navigation — not Gist-synced.
+  let commaPendingActive = false;
+
   // Playlist panel UI state. The search text, sort mode, and tag filter
   // selection (playlistQuery/playlistVideoSort/playlistTagFilters) are the
   // actual "which videos, in what order" playlist definition — that's
@@ -378,6 +384,103 @@
     scheduleMarkerRender();
   }
 
+  // --- category -----------------------------------------------------------
+  //
+  // The panel's category select is the one place a video's category is set:
+  // `activeCategoryId` (YTM_Storage) is where a never-before-seen video's
+  // first bookmark lands (see the fallback in YTM_Bookmarks.addClip/
+  // applyRawText) and also which category the playlist panel/Library page
+  // show — so switching it here re-scopes both at once. Picking a category
+  // for a video that already has bookmarks elsewhere moves it there via
+  // YTM_Categories.moveVideo instead of forking it into two places.
+
+  async function refreshCategoryUI() {
+    const panel = document.getElementById(PANEL_ID);
+    const select = panel?.querySelector('.ytm-category-select');
+    if (!select || !currentVideoId) return;
+
+    const categories = await YTM_Storage.getCategories();
+    const existingCategoryId = await YTM_Bookmarks.resolveCategoryForVideo(currentVideoId);
+    const selectedId = existingCategoryId || (await YTM_Storage.getActiveCategoryId());
+
+    select.innerHTML = '';
+    for (const category of categories) {
+      const option = document.createElement('option');
+      option.value = category.id;
+      option.textContent = category.name;
+      select.appendChild(option);
+    }
+    select.value = selectedId;
+  }
+
+  async function moveCurrentVideoToCategory(newCategoryId) {
+    await YTM_Storage.saveActiveCategoryId(newCategoryId);
+    const existingCategoryId = await YTM_Bookmarks.resolveCategoryForVideo(currentVideoId);
+    if (existingCategoryId && existingCategoryId !== newCategoryId) {
+      await YTM_Categories.moveVideo(currentVideoId, existingCategoryId, newCategoryId);
+    }
+    await refreshPanel();
+    scheduleMarkerRender();
+  }
+
+  async function handleCategoryChange(e) {
+    if (!currentVideoId || !e.target.value) return;
+    await moveCurrentVideoToCategory(e.target.value);
+  }
+
+  async function handleAddCategory() {
+    const name = window.prompt('New category name:');
+    if (name == null) return;
+    const result = await YTM_Categories.create(name);
+    if (!result.ok) {
+      alert(result.message);
+      return;
+    }
+    if (currentVideoId) await moveCurrentVideoToCategory(result.id);
+  }
+
+  // --- keyboard shortcuts -------------------------------------------------
+  //
+  // '/' marks a start (end optional). ',' also marks a start, but flags it
+  // as expecting an end: the *next* '/' or ',' first closes that still-open
+  // clip at the current time (handleEnd), then opens the new one — so a
+  // run of ','-marked clips never leaves more than one open at a time. A
+  // '/'-started clip carries no such expectation and is left open.
+  function isTypingTarget(el) {
+    if (!el) return false;
+    const tag = el.tagName;
+    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
+  }
+
+  async function handleShortcutStart() {
+    if (commaPendingActive) {
+      await handleEnd();
+      commaPendingActive = false;
+    }
+    await handleStart();
+  }
+
+  async function handleShortcutKeydown(e) {
+    if (e.repeat || e.ctrlKey || e.altKey || e.metaKey || e.isComposing) return;
+    if (isTypingTarget(document.activeElement)) return;
+    if (!video || !currentVideoId) return;
+    if (e.key === '/') {
+      e.preventDefault();
+      e.stopPropagation();
+      await handleShortcutStart();
+    } else if (e.key === '.') {
+      e.preventDefault();
+      e.stopPropagation();
+      await handleEnd();
+      commaPendingActive = false;
+    } else if (e.key === ',') {
+      e.preventDefault();
+      e.stopPropagation();
+      await handleShortcutStart();
+      commaPendingActive = true;
+    }
+  }
+
   const rowActions = {
     canMarkTime: true,
     onToggleFavorite: async (bookmark) => {
@@ -448,35 +551,37 @@
     panel.id = PANEL_ID;
     panel.innerHTML = `
       <div class="ytm-panel-toggle-row">
-        <button type="button" class="ytm-btn ytm-btn-toggle-panel">🔖 Bookmarks ▾</button>
+        <button type="button" class="ytm-icon-btn-lg ytm-btn-toggle-panel" title="Bookmarks">🔖 Bookmarks ▾</button>
         <div class="ytm-panel-toggle-actions">
-          <button type="button" class="ytm-btn ytm-btn-library" title="Open the full Library page">📚 Library</button>
-          <button type="button" class="ytm-btn ytm-btn-sync" title="Sync now">⟲ Sync</button>
-          <button type="button" class="ytm-btn ytm-btn-settings" title="Open Settings">⚙️ Settings</button>
+          <button type="button" class="ytm-icon-btn-lg ytm-btn-library" title="Open Library">📚</button>
         </div>
       </div>
       <div class="ytm-panel-body">
+        <div class="ytm-category-row">
+          <select class="ytm-category-select" title="Category — new bookmarks for this video are added here"></select>
+          <button type="button" class="ytm-icon-btn-lg ytm-btn-category-add" title="New category">＋</button>
+        </div>
         <div class="ytm-panel-header">
           <div class="ytm-panel-actions">
-            <button type="button" class="ytm-btn ytm-btn-start">🔖 Bookmark start</button>
-            <button type="button" class="ytm-btn ytm-btn-end" disabled>🏁 Bookmark end</button>
+            <button type="button" class="ytm-icon-btn-lg ytm-btn-start" title="Bookmark start (/)">⏺</button>
+            <button type="button" class="ytm-icon-btn-lg ytm-btn-end" disabled title="Bookmark end (.)">⏹</button>
             <span class="ytm-hint"></span>
           </div>
           <div class="ytm-panel-toolbar">
-            <button type="button" class="ytm-btn ytm-btn-autoplay" title="On: Play jumps between bookmarks and stops after the last one. Off: Play just plays the video normally from that point.">AutoPlay Bookmark: On</button>
-            <button type="button" class="ytm-btn ytm-btn-raw" title="Bulk add/edit as text">Raw text</button>
-            <button type="button" class="ytm-btn ytm-btn-copy" title="Copy this video's bookmarks as text">Copy all</button>
+            <button type="button" class="ytm-icon-btn-lg ytm-btn-autoplay" title="AutoPlay Bookmark: On — Play jumps between bookmarks and stops after the last one.">🔁</button>
+            <button type="button" class="ytm-icon-btn-lg ytm-btn-raw" title="Raw text editor">📝</button>
+            <button type="button" class="ytm-icon-btn-lg ytm-btn-copy" title="Copy this video's bookmarks as text">📋</button>
           </div>
         </div>
         <div class="ytm-add-row">
           <input type="text" class="ytm-add-input" placeholder="1:10 or 1:10-2:00" spellcheck="false">
           <input type="text" class="ytm-add-label-input" placeholder="Label" spellcheck="false">
-          <button type="button" class="ytm-btn ytm-add-btn">Add</button>
+          <button type="button" class="ytm-icon-btn-lg ytm-add-btn" title="Add bookmark">➕</button>
         </div>
         <textarea class="ytm-raw-editor" spellcheck="false" hidden></textarea>
         <div class="ytm-raw-actions" hidden>
-          <button type="button" class="ytm-btn ytm-raw-apply">Apply</button>
-          <button type="button" class="ytm-btn ytm-raw-cancel">Cancel</button>
+          <button type="button" class="ytm-icon-btn-lg ytm-raw-apply" title="Apply">✓</button>
+          <button type="button" class="ytm-icon-btn-lg ytm-raw-cancel" title="Cancel">✕</button>
         </div>
         <ul class="ytm-clip-list"></ul>
       </div>
@@ -491,10 +596,8 @@
     panel.querySelector('.ytm-btn-library').addEventListener('click', () => {
       chrome.runtime.sendMessage({ type: 'ytm-open-library' });
     });
-    panel.querySelector('.ytm-btn-settings').addEventListener('click', () => {
-      chrome.runtime.sendMessage({ type: 'ytm-open-settings' });
-    });
-    panel.querySelector('.ytm-btn-sync').addEventListener('click', syncNow);
+    panel.querySelector('.ytm-category-select').addEventListener('change', handleCategoryChange);
+    panel.querySelector('.ytm-btn-category-add').addEventListener('click', handleAddCategory);
 
     const addInput = panel.querySelector('.ytm-add-input');
     const addLabelInput = panel.querySelector('.ytm-add-label-input');
@@ -538,44 +641,35 @@
     await refreshPreferencesUI();
   }
 
-  // Runs a manual sync via the background script (it owns chrome.tabs /
-  // the Gist API), same YTM_Sync.run() used by autosync — bookmarks/tags
-  // are re-rendered by the storage.onChanged listener below once the
-  // merge writes land, so this just handles the button's own state.
-  async function syncNow() {
-    const panel = document.getElementById(PANEL_ID);
-    const btn = panel?.querySelector('.ytm-btn-sync');
-    if (btn) {
-      btn.disabled = true;
-      btn.textContent = '⟲ Syncing…';
-    }
-    const result = await chrome.runtime.sendMessage({ type: 'ytm-sync-now' });
-    if (btn) {
-      btn.disabled = false;
-      btn.textContent = result && !result.ok ? '⟲ Sync failed' : '⟲ Sync';
-      if (result && !result.ok) {
-        btn.title = result.message || 'Sync failed.';
-        setTimeout(() => {
-          btn.textContent = '⟲ Sync';
-          btn.title = 'Sync now';
-        }, 2500);
-      }
-    }
-  }
-
   async function togglePanelCollapsed() {
     const prefs = await YTM_Storage.getPreferences();
     await YTM_Storage.savePreferences({ ...prefs, panelCollapsed: !prefs.panelCollapsed, updatedAt: Date.now() });
     await refreshPreferencesUI();
   }
 
+  // Separate from togglePanelCollapsed so the playlist panel can be shown
+  // or hidden independently of the bookmarks panel's own collapse state.
+  async function togglePlaylistCollapsed() {
+    const prefs = await YTM_Storage.getPreferences();
+    await YTM_Storage.savePreferences({ ...prefs, playlistCollapsed: !prefs.playlistCollapsed, updatedAt: Date.now() });
+    await refreshPreferencesUI();
+  }
+
+  function applyAutoplayButtonState(btn, on) {
+    if (!btn) return;
+    btn.classList.toggle('active', on);
+    btn.title = on
+      ? 'AutoPlay Bookmark: On — Play jumps between bookmarks and stops after the last one.'
+      : 'AutoPlay Bookmark: Off — Play just plays the video normally from that point.';
+  }
+
   async function refreshPreferencesUI() {
     const panel = document.getElementById(PANEL_ID);
     if (!panel) return;
     const prefs = await YTM_Storage.getPreferences();
+    const autoplayOn = prefs.autoplay !== false;
 
-    const autoplayBtn = panel.querySelector('.ytm-btn-autoplay');
-    if (autoplayBtn) autoplayBtn.textContent = `AutoPlay Bookmark: ${prefs.autoplay === false ? 'Off' : 'On'}`;
+    applyAutoplayButtonState(panel.querySelector('.ytm-btn-autoplay'), autoplayOn);
 
     const body = panel.querySelector('.ytm-panel-body');
     const toggleBtn = panel.querySelector('.ytm-btn-toggle-panel');
@@ -585,11 +679,12 @@
 
     const playlistPanel = document.getElementById(PLAYLIST_PANEL_ID);
     if (playlistPanel) {
-      playlistPanel.hidden = collapsed;
-      const playlistAutoplayBtn = playlistPanel.querySelector('.ytm-btn-playlist-autoplay');
-      if (playlistAutoplayBtn) {
-        playlistAutoplayBtn.textContent = `AutoPlay Bookmark: ${prefs.autoplay === false ? 'Off' : 'On'}`;
-      }
+      const playlistBody = playlistPanel.querySelector('.ytm-playlist-body');
+      const playlistToggleBtn = playlistPanel.querySelector('.ytm-btn-toggle-playlist');
+      const playlistCollapsed = !!prefs.playlistCollapsed;
+      if (playlistBody) playlistBody.hidden = playlistCollapsed;
+      if (playlistToggleBtn) playlistToggleBtn.textContent = playlistCollapsed ? '▤ Playlist ▸' : '▤ Playlist ▾';
+      applyAutoplayButtonState(playlistPanel.querySelector('.ytm-btn-playlist-autoplay'), autoplayOn);
     }
   }
 
@@ -648,6 +743,8 @@
     const panel = injectPanel();
     if (!panel) return;
 
+    await refreshCategoryUI();
+
     const clips = await getBookmarksForCurrentVideo();
     const pending = await YTM_Bookmarks.findPendingClip(currentVideoId);
 
@@ -681,8 +778,11 @@
     panel.id = PLAYLIST_PANEL_ID;
     panel.innerHTML = `
       <div class="ytm-panel-toggle-row">
-        <span class="ytm-playlist-label">🔖 YouTube Manager — Playlist</span>
-        <button type="button" class="ytm-btn ytm-btn-playlist-autoplay" title="On: playback stays within bookmarks and auto-advances to the next video in this list when a video finishes. Off: normal playback, no auto-advance.">AutoPlay Bookmark: On</button>
+        <button type="button" class="ytm-icon-btn-lg ytm-btn-toggle-playlist" title="Playlist">▤ Playlist ▾</button>
+        <span class="ytm-playlist-label"></span>
+        <div class="ytm-panel-toggle-actions">
+          <button type="button" class="ytm-icon-btn-lg ytm-btn-playlist-autoplay" title="AutoPlay Bookmark: On — playback stays within bookmarks and auto-advances to the next video when one finishes.">🔁</button>
+        </div>
       </div>
       <div class="ytm-playlist-body">
         <div class="ytm-playlist-controls">
@@ -695,7 +795,7 @@
             <option value="rankAsc">Rank (low to high)</option>
             <option value="rankDesc">Rank (high to low)</option>
           </select>
-          <button type="button" class="ytm-btn ytm-btn-playlist-tag-toggle" title="Filter by tag">Tags</button>
+          <button type="button" class="ytm-icon-btn-lg ytm-btn-playlist-tag-toggle" title="Filter by tag">🏷️</button>
         </div>
         <div class="ytm-playlist-tag-section" hidden>
           <div class="ytm-playlist-tag-controls">
@@ -725,6 +825,7 @@
     panel.querySelector('.ytm-playlist-tag-section').hidden = playlistTagFilters.size === 0;
     panel.querySelector('.ytm-btn-playlist-tag-toggle').classList.toggle('active', playlistTagFilters.size > 0);
 
+    panel.querySelector('.ytm-btn-toggle-playlist').addEventListener('click', togglePlaylistCollapsed);
     panel.querySelector('.ytm-btn-playlist-autoplay').addEventListener('click', toggleAutoplay);
     panel.querySelector('.ytm-playlist-search').addEventListener('input', (e) => {
       playlistQuery = e.target.value;
@@ -1011,7 +1112,7 @@
     const categories = await YTM_Storage.getCategories();
     const activeCategory = categories.find((c) => c.id === activeCategoryId);
     panel.querySelector('.ytm-playlist-label').textContent =
-      `🔖 YouTube Manager — ${activeCategory ? activeCategory.name : 'Bookmarks'} (${groups.length})`;
+      `${activeCategory ? activeCategory.name : 'Bookmarks'} (${groups.length})`;
 
     // One atomic swap (build all nodes first, then a single
     // replaceChildren call) instead of a separate clear-then-append —
@@ -1179,6 +1280,7 @@
       videoEndedHandler = null;
       clearPlayQueue();
     }
+    commaPendingActive = false;
   }
 
   // Bookmarks/tags/videoTags/videoRanks are stored per category, as
@@ -1211,6 +1313,8 @@
     if (bookmarksChanged) {
       refreshPanel();
       scheduleMarkerRender();
+    } else if (changes.categories || changes.activeCategoryId) {
+      refreshCategoryUI();
     }
   });
 
@@ -1226,6 +1330,10 @@
     teardown();
     setTimeout(setup, 300);
   });
+
+  // Capture phase so this runs before YouTube's own '/'-focuses-search and
+  // '.'/',' -frame-step shortcut handlers see the event.
+  document.addEventListener('keydown', handleShortcutKeydown, true);
 
   setup();
 })();

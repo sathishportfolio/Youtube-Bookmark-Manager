@@ -423,6 +423,7 @@ const YTM_Storage = {
       autosyncEnabled: true,
       extensionEnabled: true,
       panelCollapsed: false,
+      playlistCollapsed: false,
       playlistQuery: '',
       playlistSort: 'recent',
       playlistTagFilters: [],
