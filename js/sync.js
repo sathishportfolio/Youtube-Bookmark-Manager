@@ -10,6 +10,7 @@ const YTM_Sync = {
       tags: await YTM_Storage.getTags(id),
       tagsLastModified: await YTM_Storage.getTagsLastModified(id),
       videoTags: await YTM_Storage.getAllVideoTags(id),
+      videoInfo: await YTM_Storage.getAllVideoInfo(id),
       videoRanks: await YTM_Storage.getVideoRanks(id)
     };
   },
@@ -74,6 +75,7 @@ const YTM_Sync = {
 
           await YTM_Storage.saveAllBookmarks(id, mergedVideo.bookmarks);
           await YTM_Storage.saveAllVideoTags(id, mergedVideo.videoTags);
+          await YTM_Storage.saveAllVideoInfo(id, mergedVideo.videoInfo);
           await YTM_Storage.saveLastModifiedByVideoId(id, mergedVideo.lastModifiedByVideoId);
           await YTM_Storage.saveTags(id, mergedTags.tags);
           await YTM_Storage.saveTagsLastModified(id, mergedTags.tagsLastModified);
@@ -86,6 +88,7 @@ const YTM_Sync = {
             tags: mergedTags.tags,
             tagsLastModified: mergedTags.tagsLastModified,
             videoTags: mergedVideo.videoTags,
+            videoInfo: mergedVideo.videoInfo,
             videoRanks: mergedRanks
           };
         }

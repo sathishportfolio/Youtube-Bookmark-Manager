@@ -284,6 +284,46 @@ const YTM_Storage = {
     await this.touchVideo(categoryId, videoId);
   },
 
+  // --- video info: notes + a synced title/channel/thumbnail snapshot -----
+  //
+  // Unlike videoMeta below (a local-only display cache), this is per
+  // category and synced through the Gist — { <videoId>: { notes, title,
+  // channel, channelUrl, thumbnailUrl } }. Notes are the point of this
+  // (so they follow a video across devices), but title/channel/thumbnail
+  // ride along too so a video shows correctly on a device that's never
+  // actually visited it (see YTM_Bookmarks.rememberVideoMeta). Changes
+  // bump the same lastModifiedByVideoId entry as a clip/tag write, so a
+  // video's clips, tags, and notes all merge together as one unit — see
+  // YTM_Gist.mergeVideoData.
+
+  async getAllVideoInfo(categoryId) {
+    return this._get(this._catKey('videoInfo', categoryId), {});
+  },
+
+  async saveAllVideoInfo(categoryId, videoInfo) {
+    await this._set({ [this._catKey('videoInfo', categoryId)]: videoInfo });
+  },
+
+  async getVideoInfo(categoryId, videoId) {
+    const all = await this.getAllVideoInfo(categoryId);
+    return all[videoId] || null;
+  },
+
+  // Pass patch: null to remove the entry outright (e.g. when a video is
+  // fully removed from a category). Otherwise patch is shallow-merged
+  // into whatever's already stored, so callers can update just notes (or
+  // just the title/channel snapshot) without clobbering the other.
+  async saveVideoInfoForVideo(categoryId, videoId, patch) {
+    const all = await this.getAllVideoInfo(categoryId);
+    if (patch == null) {
+      delete all[videoId];
+    } else {
+      all[videoId] = { ...all[videoId], ...patch };
+    }
+    await this.saveAllVideoInfo(categoryId, all);
+    await this.touchVideo(categoryId, videoId);
+  },
+
   // Local-only title/channel cache, keyed by video id — never synced, since
   // the Gist payload only stores clip data. Populated whenever the content
   // script visits a video or a quick-add reads its page metadata. Global
@@ -462,7 +502,7 @@ const YTM_Storage = {
   // YTM_Gist.deleteGist first.
   async clearAllLocalData() {
     const categories = await this.getCategories();
-    const perCategoryBases = ['bookmarks', 'lastModifiedByVideoId', 'tags', 'tagsLastModified', 'pendingTagDeletions', 'videoTags', 'videoRanks'];
+    const perCategoryBases = ['bookmarks', 'lastModifiedByVideoId', 'tags', 'tagsLastModified', 'pendingTagDeletions', 'videoTags', 'videoRanks', 'videoInfo'];
     const keys = ['categories', 'categoriesLastModified', 'pendingCategoryDeletions', 'activeCategoryId', 'preferences', 'videoMeta', 'pendingPlay', 'settings'];
     for (const cat of categories) {
       for (const base of perCategoryBases) keys.push(this._catKey(base, cat.id));
@@ -487,7 +527,7 @@ const YTM_Storage = {
   // sync, since nothing here outranks them anymore.
   async clearBookmarkData() {
     const categories = await this.getCategories();
-    const perCategoryBases = ['bookmarks', 'lastModifiedByVideoId', 'tags', 'tagsLastModified', 'pendingTagDeletions', 'videoTags', 'videoRanks'];
+    const perCategoryBases = ['bookmarks', 'lastModifiedByVideoId', 'tags', 'tagsLastModified', 'pendingTagDeletions', 'videoTags', 'videoRanks', 'videoInfo'];
     const keys = [];
     for (const cat of categories) {
       for (const base of perCategoryBases) keys.push(this._catKey(base, cat.id));

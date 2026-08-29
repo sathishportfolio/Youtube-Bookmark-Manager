@@ -1,9 +1,10 @@
 // Shared by the Settings page (js/options.js) and the Library page
 // (js/manage.js) so every "Import / export" UI merges data the exact same
 // way. Export shape mirrors the Gist sync payload (see js/gist.js): a
-// category list plus one bookmarks/tags/videoTags/videoRanks blob per
-// category — an exported file can be re-imported here or (for a single
-// category) dropped straight into a Gist as that category's file by hand.
+// category list plus one bookmarks/tags/videoTags/videoInfo/videoRanks
+// blob per category — an exported file can be re-imported here or (for a
+// single category) dropped straight into a Gist as that category's file
+// by hand.
 const YTM_ImportExport = {
   async _readLocalCategoryData(id) {
     return {
@@ -12,6 +13,7 @@ const YTM_ImportExport = {
       tags: await YTM_Storage.getTags(id),
       tagsLastModified: await YTM_Storage.getTagsLastModified(id),
       videoTags: await YTM_Storage.getAllVideoTags(id),
+      videoInfo: await YTM_Storage.getAllVideoInfo(id),
       videoRanks: await YTM_Storage.getVideoRanks(id)
     };
   },
@@ -53,6 +55,7 @@ const YTM_ImportExport = {
     const bookmarks = {};
     const lastModifiedByVideoId = {};
     const videoTags = {};
+    const videoInfo = {};
     const usedTagIds = new Set();
     for (const id of idSet) {
       if (local.bookmarks[id]) bookmarks[id] = local.bookmarks[id];
@@ -61,6 +64,7 @@ const YTM_ImportExport = {
         videoTags[id] = local.videoTags[id];
         local.videoTags[id].forEach((t) => usedTagIds.add(t));
       }
+      if (local.videoInfo[id]) videoInfo[id] = local.videoInfo[id];
     }
     const tags = local.tags.filter((t) => usedTagIds.has(t.id));
     const tagsLastModified = {};
@@ -70,7 +74,7 @@ const YTM_ImportExport = {
 
     const categories = [{ id: categoryId, name: categoryName, createdAt: 0, updatedAt: 0 }];
     const categoryData = {
-      [categoryId]: { bookmarks, lastModifiedByVideoId, tags, tagsLastModified, videoTags, videoRanks: { ranks, updatedAt: local.videoRanks.updatedAt } }
+      [categoryId]: { bookmarks, lastModifiedByVideoId, tags, tagsLastModified, videoTags, videoInfo, videoRanks: { ranks, updatedAt: local.videoRanks.updatedAt } }
     };
     this._downloadJson({ categories, categoriesLastModified: {}, preferences: {}, categoryData }, filenamePrefix);
     return { ok: true };
@@ -124,6 +128,7 @@ const YTM_ImportExport = {
             tags: imported.tags,
             tagsLastModified: imported.tagsLastModified,
             videoTags: imported.videoTags,
+            videoInfo: imported.videoInfo,
             videoRanks: imported.videoRanks
           }
         }
@@ -172,6 +177,7 @@ const YTM_ImportExport = {
 
       await YTM_Storage.saveAllBookmarks(id, mergedVideo.bookmarks);
       await YTM_Storage.saveAllVideoTags(id, mergedVideo.videoTags);
+      await YTM_Storage.saveAllVideoInfo(id, mergedVideo.videoInfo);
       await YTM_Storage.saveLastModifiedByVideoId(id, mergedVideo.lastModifiedByVideoId);
       await YTM_Storage.saveTags(id, mergedTags.tags);
       await YTM_Storage.saveTagsLastModified(id, mergedTags.tagsLastModified);

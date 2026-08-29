@@ -547,7 +547,11 @@ async function renderVideoGroup(group) {
   const count = document.createElement('div');
   count.className = 'video-clip-count';
   count.textContent = `${group.clips.length} bookmark${group.clips.length === 1 ? '' : 's'}`;
-  meta.append(buildVideoRankBadge(group), title, channel, count, buildVideoTagsRow(group));
+  const rankRow = document.createElement('div');
+  rankRow.className = 'video-rank-row';
+  rankRow.append(buildVideoRankBadge(group), YTM_Row.buildNotesControl(group.videoId));
+
+  meta.append(rankRow, title, channel, count, buildVideoTagsRow(group));
 
   header.append(checkbox, img, meta);
   section.appendChild(header);
@@ -1035,18 +1039,26 @@ async function refreshSyncStatus() {
 }
 
 // Refetches title/channel/channelUrl (via oEmbed) for every bookmarked
-// video — for when a video was renamed, or was bookmarked before
-// playerVideoData-based title capture existed (see js/content.js) and
-// ended up with a mismatched title or a missing channel link. Thumbnails
-// aren't cached by the extension at all — they're always the live
+// video *currently in view* — the active category, narrowed by whatever
+// search text/tag filter is applied right now (matchesFilter) — rather
+// than every video in every category, so this stays cheap (one YouTube
+// request per video) even on a large library. Thumbnails aren't cached by
+// the extension at all — they're always the live
 // https://i.ytimg.com/vi/<videoId>/hqdefault.jpg URL derived straight from
 // the video id — so there's nothing to refetch for those; re-rendering
 // after a title fix is enough to show a video correctly.
+//
+// YTM_Bookmarks.rememberVideoMeta (rather than a raw YTM_Storage.
+// saveVideoMeta call) also mirrors the refreshed title/channel/thumbnail
+// into the synced videoInfo record alongside each video's notes, so a
+// manual sync afterwards actually carries this refresh to the Gist and
+// other devices instead of leaving it as a local-only cache update.
 async function refreshAllVideoInfo() {
-  const videoIds = groupsCache.map((g) => g.videoId);
+  const query = document.getElementById('searchInput').value.trim();
+  const videoIds = groupsCache.filter((g) => matchesFilter(g, query)).map((g) => g.videoId);
   if (videoIds.length === 0) return;
   const confirmed = confirm(
-    `Refetch title, channel, and channel link for all ${videoIds.length} bookmarked video(s) from YouTube? This overwrites any locally cached names.`
+    `Refetch title, channel, and channel link for the ${videoIds.length} bookmarked video(s) currently in view from YouTube? This overwrites any locally cached names.`
   );
   if (!confirmed) return;
 
@@ -1059,7 +1071,7 @@ async function refreshAllVideoInfo() {
       const videoId = videoIds[nextIndex++];
       const meta = await YTM_Youtube.fetchVideoMetadata(videoId);
       if (meta) {
-        await YTM_Storage.saveVideoMeta(videoId, { title: meta.title || videoId, channel: meta.channel || '', channelUrl: meta.channelUrl || '' });
+        await YTM_Bookmarks.rememberVideoMeta(videoId, meta.title, meta.channel, meta.channelUrl);
       }
       done++;
       setStatus(`Refreshing video info… (${done}/${videoIds.length})`);
@@ -1068,7 +1080,13 @@ async function refreshAllVideoInfo() {
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, videoIds.length) }, worker));
 
   await renderList();
-  setStatus('Video names and channel links refreshed from YouTube.');
+  setStatus('Syncing refreshed info with Gist…');
+  const result = await YTM_Sync.run();
+  await refreshSyncStatus();
+  setStatus(
+    result.ok ? 'Video info refreshed and synced with Gist.' : `Refreshed locally — sync failed: ${result.message}`,
+    !result.ok
+  );
 }
 
 async function exportToFile() {
@@ -1176,7 +1194,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (area === 'sync' && changes.credentials) refreshSyncStatus();
     if (area !== 'local') return;
     const relevant =
-      Object.keys(changes).some((k) => k.startsWith('bookmarks::') || k.startsWith('tags::') || k.startsWith('videoTags::') || k.startsWith('videoRanks::')) ||
+      Object.keys(changes).some((k) => k.startsWith('bookmarks::') || k.startsWith('tags::') || k.startsWith('videoTags::') || k.startsWith('videoInfo::') || k.startsWith('videoRanks::')) ||
       changes.categories ||
       changes.categoriesLastModified;
     if (relevant) renderList();

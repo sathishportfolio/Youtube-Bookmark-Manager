@@ -348,6 +348,10 @@
   async function initializePlayback() {
     if (!video) return;
 
+    // An explicit cross-tab "play this bookmark" handoff (from the popup
+    // or the Playlist/Library page) always honors the click that caused
+    // it, regardless of Autoplay — that's a direct user action, not the
+    // automatic "jump to the first bookmark on load" behavior below.
     const pending = await YTM_Storage.getPendingPlay();
     if (pending && pending.videoId === currentVideoId) {
       await YTM_Storage.clearPendingPlay();
@@ -358,6 +362,11 @@
         return;
       }
     }
+
+    // With Autoplay off, playback should just be normal YouTube — resume
+    // wherever the page/YouTube itself would, not forced to a bookmark.
+    const prefs = await YTM_Storage.getPreferences();
+    if (prefs.autoplay === false) return;
 
     const clips = await getBookmarksForCurrentVideo();
     const chronological = YTM_Bookmarks.sortByStart(clips);
@@ -460,6 +469,43 @@
     await handleStart();
   }
 
+  // Unlike the panel's "Bookmark end" button (only acts on a still-open
+  // pending clip), '.' always targets the most recently created clip —
+  // if it has no end yet this adds one, and if it already has one this
+  // just nudges that end forward, so repeat '.' presses keep updating the
+  // same clip's end at the current playback time. No-ops if the video has
+  // no clips at all.
+  async function handleShortcutEnd() {
+    if (!video || !currentVideoId) return;
+    const updated = await YTM_Bookmarks.setRecentClipEnd(currentVideoId, video.currentTime);
+    if (!updated) return;
+    await refreshPanel();
+    scheduleMarkerRender();
+  }
+
+  // '[' jumps to the last (chronologically, by start time) bookmark's
+  // start and plays. ']' jumps to that same bookmark's end and plays; if
+  // it has no end yet, playFromPoint's own fallback plays from its start
+  // instead, same as clicking its end time would.
+  async function lastBookmarkChronological() {
+    if (!currentVideoId) return null;
+    const clips = await getBookmarksForCurrentVideo();
+    const chronological = YTM_Bookmarks.sortByStart(clips);
+    return chronological.length > 0 ? chronological[chronological.length - 1] : null;
+  }
+
+  async function handleGotoLastStart() {
+    const last = await lastBookmarkChronological();
+    if (!last) return;
+    await playFromPoint(last, 'start');
+  }
+
+  async function handleGotoLastEnd() {
+    const last = await lastBookmarkChronological();
+    if (!last) return;
+    await playFromPoint(last, 'end');
+  }
+
   async function handleShortcutKeydown(e) {
     if (e.repeat || e.ctrlKey || e.altKey || e.metaKey || e.isComposing) return;
     if (isTypingTarget(document.activeElement)) return;
@@ -471,13 +517,21 @@
     } else if (e.key === '.') {
       e.preventDefault();
       e.stopPropagation();
-      await handleEnd();
+      await handleShortcutEnd();
       commaPendingActive = false;
     } else if (e.key === ',') {
       e.preventDefault();
       e.stopPropagation();
       await handleShortcutStart();
       commaPendingActive = true;
+    } else if (e.key === '[') {
+      e.preventDefault();
+      e.stopPropagation();
+      await handleGotoLastStart();
+    } else if (e.key === ']') {
+      e.preventDefault();
+      e.stopPropagation();
+      await handleGotoLastEnd();
     }
   }
 
@@ -568,7 +622,8 @@
             <span class="ytm-hint"></span>
           </div>
           <div class="ytm-panel-toolbar">
-            <button type="button" class="ytm-icon-btn-lg ytm-btn-autoplay" title="AutoPlay Bookmark: On — Play jumps between bookmarks and stops after the last one.">🔁</button>
+            <span class="ytm-notes-slot"></span>
+            <button type="button" class="ytm-icon-btn-lg ytm-btn-autoplay" title="AutoPlay Bookmark: On — Play jumps between bookmarks and stops after the last one.">▶ On</button>
             <button type="button" class="ytm-icon-btn-lg ytm-btn-raw" title="Raw text editor">📝</button>
             <button type="button" class="ytm-icon-btn-lg ytm-btn-copy" title="Copy this video's bookmarks as text">📋</button>
           </div>
@@ -598,6 +653,9 @@
     });
     panel.querySelector('.ytm-category-select').addEventListener('change', handleCategoryChange);
     panel.querySelector('.ytm-btn-category-add').addEventListener('click', handleAddCategory);
+    panel.querySelector('.ytm-notes-slot').appendChild(
+      YTM_Row.buildNotesControl(currentVideoId, panel.querySelector('.ytm-panel-body'))
+    );
 
     const addInput = panel.querySelector('.ytm-add-input');
     const addLabelInput = panel.querySelector('.ytm-add-label-input');
@@ -658,6 +716,7 @@
   function applyAutoplayButtonState(btn, on) {
     if (!btn) return;
     btn.classList.toggle('active', on);
+    btn.textContent = `${on ? '▶' : '⏸'} ${on ? 'On' : 'Off'}`;
     btn.title = on
       ? 'AutoPlay Bookmark: On — Play jumps between bookmarks and stops after the last one.'
       : 'AutoPlay Bookmark: Off — Play just plays the video normally from that point.';
@@ -781,7 +840,7 @@
         <button type="button" class="ytm-icon-btn-lg ytm-btn-toggle-playlist" title="Playlist">▤ Playlist ▾</button>
         <span class="ytm-playlist-label"></span>
         <div class="ytm-panel-toggle-actions">
-          <button type="button" class="ytm-icon-btn-lg ytm-btn-playlist-autoplay" title="AutoPlay Bookmark: On — playback stays within bookmarks and auto-advances to the next video when one finishes.">🔁</button>
+          <button type="button" class="ytm-icon-btn-lg ytm-btn-playlist-autoplay" title="AutoPlay Bookmark: On — playback stays within bookmarks and auto-advances to the next video when one finishes.">▶ On</button>
         </div>
       </div>
       <div class="ytm-playlist-body">
@@ -1029,7 +1088,11 @@
       sub.textContent = `${group.channel} · ${group.clips.length} bookmark${group.clips.length === 1 ? '' : 's'}`;
     }
 
-    meta.append(rankBadge, title, sub);
+    const rankRow = document.createElement('div');
+    rankRow.className = 'ytm-playlist-rank-row';
+    rankRow.append(rankBadge, YTM_Row.buildNotesControl(group.videoId));
+
+    meta.append(rankRow, title, sub);
 
     if (group.tags.length > 0) {
       const tagsRow = document.createElement('div');
@@ -1307,7 +1370,7 @@
       }
       refreshPreferencesUI();
       syncPlaylistPrefsFromChange(changes.preferences.newValue);
-    } else if (bookmarksChanged || changedKeyWithPrefix(changes, 'tags::') || changedKeyWithPrefix(changes, 'videoTags::') || changedKeyWithPrefix(changes, 'videoRanks::') || changes.activeCategoryId) {
+    } else if (bookmarksChanged || changedKeyWithPrefix(changes, 'tags::') || changedKeyWithPrefix(changes, 'videoTags::') || changedKeyWithPrefix(changes, 'videoRanks::') || changedKeyWithPrefix(changes, 'videoInfo::') || changes.activeCategoryId) {
       renderPlaylist();
     }
     if (bookmarksChanged) {
@@ -1315,6 +1378,13 @@
       scheduleMarkerRender();
     } else if (changes.categories || changes.activeCategoryId) {
       refreshCategoryUI();
+    } else if (changedKeyWithPrefix(changes, 'videoInfo::')) {
+      // A note (or the title/channel/thumbnail snapshot alongside it) may
+      // have changed for the current video from another tab/device —
+      // refresh just this panel's own notes indicator rather than a full
+      // refreshPanel(), so an in-progress edit elsewhere in the panel
+      // isn't disturbed.
+      document.getElementById(PANEL_ID)?.querySelector('.ytm-notes-wrap')?.refreshNotesIndicator?.();
     }
   });
 
@@ -1331,9 +1401,17 @@
     setTimeout(setup, 300);
   });
 
-  // Capture phase so this runs before YouTube's own '/'-focuses-search and
-  // '.'/',' -frame-step shortcut handlers see the event.
-  document.addEventListener('keydown', handleShortcutKeydown, true);
+  // Capture phase on `window` — not `document` — so this always runs
+  // before YouTube's own '/'-focuses-search and '.'/',' frame-step
+  // handlers, regardless of script load order. Capture propagates
+  // strictly outside-in (window, then document, then further down the
+  // tree), so a window-level capture listener fires before any listener
+  // YouTube attached to document itself, even one registered earlier;
+  // a document-level listener here would instead run in registration
+  // order against YouTube's own document-level listeners, which is what
+  // let YouTube's handler occasionally win the race and swallow the key
+  // before we saw it (the intermittent "sometimes '.' doesn't work" bug).
+  window.addEventListener('keydown', handleShortcutKeydown, true);
 
   setup();
 })();

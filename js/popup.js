@@ -60,6 +60,11 @@ function renderClipList() {
     onDelete: async (b) => {
       await YTM_Bookmarks.remove(b.id);
       await loadCurrentVideo();
+    },
+    onSave: async (b, rangeText, labelText) => {
+      const result = await YTM_Bookmarks.saveEdits(b.id, rangeText, labelText);
+      if (result.ok) await loadCurrentVideo();
+      return result;
     }
   };
 

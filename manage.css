@@ -24,12 +24,17 @@ body.manage-page .video-clip-count {
   color: var(--muted);
   font-size: 11px;
 }
+.video-rank-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 3px;
+}
 .video-rank-badge {
   display: inline-block;
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 1px 7px;
-  margin-bottom: 3px;
   font-size: 11px;
   font-variant-numeric: tabular-nums;
   color: var(--muted);

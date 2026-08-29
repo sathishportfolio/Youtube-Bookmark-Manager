@@ -25,16 +25,76 @@ to work from.
   dominant, hoverable markers directly on the YouTube seek bar (tooltip with
   time range + notes; click to play that range).
 - `js/row.js` exports two renderers: `render` (full — in-page panel and an
-  expanded video in the Library page) and `renderMinimal` (popup only, and
-  a collapsed Library video shows neither — just its header). Full rows
+  expanded video in the Library page) and `renderMinimal` (popup, and a
+  collapsed Library video shows neither — just its header). Full rows
   have: favorite toggle (display order is always chronological —
   favoriting never reorders), clickable start/end timestamps (start chains
   playback into later bookmarks per Autoplay, end just jumps-and-plays
-  with no chaining — see `playFromPoint` in `js/content.js`), ⏮/⏭
+  with no chaining — see `playFromPoint` in `js/content.js`), `[`/`]`
   mark-start/mark-end from current playback (blocks duplicate start
-  times), a label field, an ✏️ edit toggle that swaps the timestamps for a
-  typeable range field, 💾 save (unsaved range/label edits highlight until
-  saved), and delete.
+  times), a label field, an ✏️ edit toggle that swaps the timestamps *and*
+  label for typeable fields (focusing the label first, since it's the one
+  most often changed), 💾 save (unsaved range/label edits highlight until
+  saved), and delete. `renderMinimal` drops the favorite toggle and
+  mark-start/mark-end (no ambient "current playback" context in the
+  popup), but otherwise shares the same edit/save-label-and-timestamp
+  pattern and delete.
+- **Keyboard shortcuts** (`js/content.js`'s `handleShortcutKeydown`, a
+  capture-phase `keydown` listener attached to `window` — not
+  `document` — so it always wins over YouTube's own `/` search-focus and
+  `.`/`,` frame-step bindings regardless of script load order: capture
+  propagates strictly outside-in, so a `window`-level listener fires
+  before anything YouTube attached to `document`, whereas a
+  `document`-level listener would instead race YouTube's own
+  document-level listener in registration order — which is what let it
+  occasionally win and swallow the key first; ignored while typing in an
+  input/textarea/select/contenteditable): `/` marks a start (end
+  optional). `,` also marks a start but flags it as expecting an end — the
+  *next* `/` or `,` first closes that still-open clip at the current time,
+  then opens the new one, so a run of `,`-marked clips never leaves more
+  than one open. `.` always targets the most recently *created* clip:
+  adds an end if it doesn't have one yet, otherwise nudges that same end
+  forward — repeat `.` presses keep adjusting it. `[` jumps to the start
+  of the most recent clip *chronologically* (by start time, not creation
+  order) and plays; `]` jumps to that same clip's end and plays, falling
+  back to its start (same as clicking its end time would) if it has no
+  end yet.
+- **Per-video notes** (`YTM_Row.buildNotesControl` in `js/row.js`, shared
+  by the in-page panel, the in-page Playlist panel, and the Library page —
+  each just drops the returned element in next to that video's
+  title/header): a 🗒️ button opens a textarea pre-filled with the video's
+  existing note (long notes are expected). Clicking the button again, or
+  anywhere else, saves and closes it — closing is driven by a capture-
+  phase document click listener checking "inside this control or its
+  editor" rather than the textarea's own blur, which proved unreliable
+  across some host pages. Clearing a note is just select-all-and-delete
+  in the textarea; there's no separate Reset control. The editor itself
+  is appended straight to `<body>` and positioned with `getBoundingClientRect`-
+  derived coordinates (`positionEditor` in `buildNotesControl`) rather
+  than being a CSS-anchored popover nested in `wrap` — nested inside a
+  narrow toolbar/list row it kept getting clipped by an overflow ancestor
+  or pushed off-panel; living in `<body>` sidesteps that. Defaults to
+  right-aligned to the button; the in-page panel passes its
+  `.ytm-panel-body` element as `alignLeftTo` so the editor's left edge
+  lines up with the panel instead of the button. The button itself is
+  fully self-contained — it reads/writes through
+  `YTM_Bookmarks.getVideoInfo`/`saveNotes`, which resolve the video's
+  category internally, so every call site just needs a `videoId`. Notes
+  sync through the Gist alongside a video's title/channel/thumbnail
+  snapshot — see `videoInfo` in the Sync data model below — and, unlike
+  tags, carry over with the video on a category move
+  (`YTM_Categories.moveVideo`) since they're video-level content rather
+  than per-category organization. Saving writes a `videoInfo::<categoryId>`
+  key, which `js/background.js`'s autosync listener treats the same as a
+  bookmark/tag write (debounced push to the Gist); `js/content.js` and
+  `js/manage.js` also each react to that key's `storage.onChanged` event
+  to refresh their own view of the note — the in-page panel just updates
+  its own notes button's indicator in place
+  (`wrap.refreshNotesIndicator`, skipping the textarea if the editor is
+  currently open so an in-progress edit isn't clobbered), while the
+  Playlist panel and Library page fall back to their normal full
+  re-render — so a note saved in one place shows up in every other
+  open page/tab without needing a manual refresh.
 - **Popup vs. Library split** (separate scripts, not a shared one gated by
   a CSS class): `js/popup.js` shows only the active tab's current video
   (if it's a YouTube watch page) with minimal rows — no other videos
@@ -51,7 +111,16 @@ to work from.
   off, it just seeks and plays the video normally from that point, with no
   jumping or pausing at clip boundaries. Both branches live in
   `playFromBookmark` in `js/content.js`; `playFromPoint` wraps it to handle
-  the separate (never-chained) "play from end" case. With Autoplay on, once
+  the separate (never-chained) "play from end" case. Autoplay also gates
+  whether *loading* a bookmarked video's watch page jumps anywhere at all:
+  `initializePlayback` only seeks to the first bookmark's start when
+  Autoplay is on — off, a freshly loaded page is left at plain YouTube
+  playback (wherever the page/YouTube itself resumes), untouched. An
+  explicit cross-tab "play this bookmark" handoff (`YTM_Storage.
+  setPendingPlay`, from the popup or the Playlist/Library page) is a
+  direct user action and always honored regardless of Autoplay — that
+  check in `initializePlayback` runs before the Autoplay gate. With
+  Autoplay on, once
   the last bookmark in the current video finishes — or the video ends
   naturally, e.g. its last clip has no end time (`ended` listener in
   `setup()`) — playback doesn't just stop: `advanceToNextPlaylistVideo`
@@ -163,27 +232,45 @@ Bookmarks sync as one JSON file per Gist, shaped exactly like this
   },
   "tags": [{ "id": "a1b2", "name": "Tutorial", "createdAt": 1735353600000, "updatedAt": 1735353600000 }],
   "tagsLastModified": { "a1b2": 1735353600000 },
-  "videoTags": { "<videoId>": ["a1b2"] }
+  "videoTags": { "<videoId>": ["a1b2"] },
+  "videoInfo": {
+    "<videoId>": {
+      "notes": "",
+      "title": "Video title",
+      "channel": "Channel name",
+      "channelUrl": "https://www.youtube.com/@channel",
+      "thumbnailUrl": "https://i.ytimg.com/vi/<videoId>/hqdefault.jpg"
+    }
+  }
 }
 ```
 
 - A clip has no `id`, `videoId`, `url`, `title`, `channel`, or `thumbnail`
   of its own — those are implied by the parent video key or cheaply
   derived. The UI's synthetic id is `videoId::createdAt`
-  (`YTM_Bookmarks.makeId`/`parseId`); title/channel are cached **locally
-  only** (not synced) under a separate `videoMeta` key in
+  (`YTM_Bookmarks.makeId`/`parseId`). Title/channel/channelUrl are cached
+  **locally only** (not synced) under a separate `videoMeta` key in
   `chrome.storage.local`, refreshed whenever the content script visits
-  that video.
+  that video — `videoInfo` above is a separate, *synced* snapshot of the
+  same fields (plus `thumbnailUrl`, deterministically derived from the
+  video id) kept alongside a video's notes specifically so a video bookmarked
+  on one device still shows a real title/thumbnail on another that's never
+  actually visited it (`YTM_Bookmarks.rememberVideoMeta` writes both,
+  skipping the `videoInfo` write — and the `lastModifiedByVideoId` bump it
+  would cause — when nothing actually changed, so revisiting an
+  already-synced video doesn't trigger a sync on every page load).
 - `preferences` always has defaults (`YTM_Storage.getPreferences`'s
   fallback), so the pushed Gist file content is never empty/degenerate —
   don't remove that fallback.
-- **Merge is per video, not per clip or per tag assignment.**
+- **Merge is per video, not per clip, tag assignment, or note.**
   `lastModifiedByVideoId[videoId]` is bumped on every write to that
-  video's clip array *or* its tags (`YTM_Storage.touchVideo`, called from
-  both `saveBookmarksForVideo` and `saveVideoTagsForVideo`). On sync,
+  video's clip array, its tags, *or* its `videoInfo` entry
+  (`YTM_Storage.touchVideo`, called from `saveBookmarksForVideo`,
+  `saveVideoTagsForVideo`, and `saveVideoInfoForVideo`). On sync,
   whichever side has the newer timestamp for a video wins that video's
-  clips and tags together, as one unit — see `YTM_Gist.mergeVideoData`.
-  Critically, the merge iterates `Object.keys(local.lastModifiedByVideoId)`,
+  clips, tags, and notes together, as one unit — see
+  `YTM_Gist.mergeVideoData`. Critically, the merge iterates
+  `Object.keys(local.lastModifiedByVideoId)`,
   **not** `Object.keys(local.bookmarks)` — a video whose last clip was just
   deleted no longer has a `bookmarks` key at all, but it's still present in
   `lastModifiedByVideoId`. Keying off `bookmarks` directly would silently

@@ -91,6 +91,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
     ytmChangedKeyWithPrefix(changes, 'tags::') ||
     ytmChangedKeyWithPrefix(changes, 'tagsLastModified::') ||
     ytmChangedKeyWithPrefix(changes, 'videoTags::') ||
+    ytmChangedKeyWithPrefix(changes, 'videoInfo::') ||
     ytmChangedKeyWithPrefix(changes, 'videoRanks::') ||
     changes.preferences ||
     changes.categories ||

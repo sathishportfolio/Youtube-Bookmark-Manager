@@ -253,10 +253,55 @@ const YTM_Bookmarks = {
   async rememberVideoMeta(videoId, title, channel, channelUrl) {
     if (!title && !channel) return;
     const existing = await YTM_Storage.getVideoMeta(videoId);
-    await YTM_Storage.saveVideoMeta(videoId, {
+    const merged = {
       title: title || videoId,
       channel: channel || '',
       channelUrl: channelUrl || existing?.channelUrl || ''
+    };
+    await YTM_Storage.saveVideoMeta(videoId, merged);
+
+    // Also mirror title/channel/thumbnail into the synced videoInfo record
+    // (see YTM_Storage) so a video shows correctly on a device that's
+    // never actually visited it — but only for a video already bookmarked
+    // somewhere (resolveCategoryForVideo), so this doesn't create a synced
+    // record for every video ever watched. Skipped when nothing actually
+    // changed, since a write here bumps lastModifiedByVideoId and would
+    // otherwise trigger a real sync on every single page visit.
+    const categoryId = await this.resolveCategoryForVideo(videoId);
+    if (!categoryId) return;
+    const info = await YTM_Storage.getVideoInfo(categoryId, videoId);
+    const thumbnailUrl = this.thumbnailUrl(videoId);
+    const changed =
+      !info ||
+      info.title !== merged.title ||
+      info.channel !== merged.channel ||
+      info.channelUrl !== merged.channelUrl ||
+      info.thumbnailUrl !== thumbnailUrl;
+    if (changed) {
+      await YTM_Storage.saveVideoInfoForVideo(categoryId, videoId, {
+        title: merged.title,
+        channel: merged.channel,
+        channelUrl: merged.channelUrl,
+        thumbnailUrl
+      });
+    }
+  },
+
+  async getVideoInfo(videoId) {
+    const categoryId = (await this.resolveCategoryForVideo(videoId)) || (await YTM_Storage.getActiveCategoryId());
+    const info = await YTM_Storage.getVideoInfo(categoryId, videoId);
+    return { notes: '', title: '', channel: '', channelUrl: '', thumbnailUrl: this.thumbnailUrl(videoId), ...info };
+  },
+
+  async saveNotes(videoId, notes) {
+    const categoryId = (await this.resolveCategoryForVideo(videoId)) || (await YTM_Storage.getActiveCategoryId());
+    const meta = (await YTM_Storage.getVideoMeta(videoId)) || {};
+    await YTM_Storage.saveVideoInfoForVideo(categoryId, videoId, {
+      notes: notes || '',
+      title: meta.title || '',
+      channel: meta.channel || '',
+      channelUrl: meta.channelUrl || '',
+      thumbnailUrl: this.thumbnailUrl(videoId)
     });
   },
 
@@ -291,6 +336,30 @@ const YTM_Bookmarks = {
     let start = clip.startTime;
     let end = currentTime;
     if (end < start) {
+      [start, end] = [end, start];
+    }
+    clip.startTime = start;
+    clip.endTime = end;
+    clip.updatedAt = Date.now();
+    await YTM_Storage.saveBookmarksForVideo(categoryId, videoId, clips);
+    return clip;
+  },
+
+  // Like completePendingClip, but targets the most recently created clip
+  // regardless of whether it already has an end — used by the '.' keyboard
+  // shortcut so a repeat press keeps nudging the same clip's end forward
+  // instead of only working once (while it's still "pending"). Returns
+  // null only when the video has no clips at all.
+  async setRecentClipEnd(videoId, currentTime) {
+    const categoryId = await this.resolveCategoryForVideo(videoId);
+    if (!categoryId) return null;
+    const clips = await YTM_Storage.getBookmarksForVideo(categoryId, videoId);
+    if (clips.length === 0) return null;
+    const clip = clips.slice().sort((a, b) => b.createdAt - a.createdAt)[0];
+
+    let start = clip.startTime;
+    let end = currentTime;
+    if (start != null && end < start) {
       [start, end] = [end, start];
     }
     clip.startTime = start;
@@ -378,6 +447,7 @@ const YTM_Bookmarks = {
   async removeVideo(categoryId, videoId) {
     await YTM_Storage.saveBookmarksForVideo(categoryId, videoId, []);
     await YTM_Storage.saveVideoTagsForVideo(categoryId, videoId, []);
+    await YTM_Storage.saveVideoInfoForVideo(categoryId, videoId, null);
   },
 
   async applyRawText(videoMeta, text) {

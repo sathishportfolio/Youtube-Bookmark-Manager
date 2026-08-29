@@ -152,6 +152,7 @@ const YTM_Gist = {
       tags: this._normalizeTags(data.tags),
       tagsLastModified: data.tagsLastModified || {},
       videoTags: data.videoTags || {},
+      videoInfo: data.videoInfo || {},
       videoRanks: data.videoRanks || { ranks: {}, updatedAt: 0 }
     };
   },
@@ -216,12 +217,14 @@ const YTM_Gist = {
 
   // Merge is per video, not per clip or per tag assignment: whichever side
   // has the newer lastModifiedByVideoId timestamp for a given video wins
-  // that video's clip array AND its tag list together, as one unit — a
-  // video's clips and tags always come from the same source/timestamp.
+  // that video's clip array, tag list, AND video info (notes + synced
+  // title/channel/thumbnail snapshot) together, as one unit — a video's
+  // clips, tags, and notes always come from the same source/timestamp.
   // Operates on one category's data at a time.
   mergeVideoData(local, remote) {
     const bookmarks = { ...remote.bookmarks };
     const videoTags = { ...remote.videoTags };
+    const videoInfo = { ...remote.videoInfo };
     const lastModifiedByVideoId = { ...remote.lastModifiedByVideoId };
 
     const localLMB = local.lastModifiedByVideoId || {};
@@ -240,11 +243,13 @@ const YTM_Gist = {
         else delete bookmarks[videoId];
         if (local.videoTags?.[videoId]) videoTags[videoId] = local.videoTags[videoId];
         else delete videoTags[videoId];
+        if (local.videoInfo?.[videoId]) videoInfo[videoId] = local.videoInfo[videoId];
+        else delete videoInfo[videoId];
         lastModifiedByVideoId[videoId] = localTime;
       }
     }
 
-    return { bookmarks, videoTags, lastModifiedByVideoId };
+    return { bookmarks, videoTags, videoInfo, lastModifiedByVideoId };
   },
 
   // Tags merge the same way videos do (mergeVideoData above): a per-id

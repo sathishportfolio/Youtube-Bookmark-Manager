@@ -109,7 +109,10 @@ const YTM_Categories = {
   // Moves every clip for videoId from one category to another. Tags don't
   // carry across categories — each has its own independent tag list — so
   // the video starts untagged in the destination; its rank there is
-  // assigned fresh (next available number) by saveBookmarksForVideo.
+  // assigned fresh (next available number) by saveBookmarksForVideo. Notes
+  // (and the synced title/channel/thumbnail snapshot alongside them) are
+  // video-level content rather than per-category organization, so — unlike
+  // tags — they carry over to the destination instead of being reset.
   async moveVideo(videoId, fromCategoryId, toCategoryId) {
     if (fromCategoryId === toCategoryId) return { ok: true };
     const clips = await YTM_Storage.getBookmarksForVideo(fromCategoryId, videoId);
@@ -118,9 +121,12 @@ const YTM_Categories = {
     const destExisting = await YTM_Storage.getBookmarksForVideo(toCategoryId, videoId);
     await YTM_Storage.saveBookmarksForVideo(toCategoryId, videoId, destExisting.concat(clips));
     await YTM_Storage.saveVideoTagsForVideo(toCategoryId, videoId, []);
+    const info = await YTM_Storage.getVideoInfo(fromCategoryId, videoId);
+    if (info) await YTM_Storage.saveVideoInfoForVideo(toCategoryId, videoId, info);
 
     await YTM_Storage.saveBookmarksForVideo(fromCategoryId, videoId, []);
     await YTM_Storage.saveVideoTagsForVideo(fromCategoryId, videoId, []);
+    await YTM_Storage.saveVideoInfoForVideo(fromCategoryId, videoId, null);
 
     return { ok: true };
   }
