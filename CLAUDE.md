@@ -48,17 +48,55 @@ to work from.
   `document`-level listener would instead race YouTube's own
   document-level listener in registration order — which is what let it
   occasionally win and swallow the key first; ignored while typing in an
-  input/textarea/select/contenteditable): `/` marks a start (end
-  optional). `,` also marks a start but flags it as expecting an end — the
-  *next* `/` or `,` first closes that still-open clip at the current time,
-  then opens the new one, so a run of `,`-marked clips never leaves more
-  than one open. `.` always targets the most recently *created* clip:
-  adds an end if it doesn't have one yet, otherwise nudges that same end
-  forward — repeat `.` presses keep adjusting it. `[` jumps to the start
-  of the most recent clip *chronologically* (by start time, not creation
-  order) and plays; `]` jumps to that same clip's end and plays, falling
-  back to its start (same as clicking its end time would) if it has no
-  end yet.
+  input/textarea/select/contenteditable): `/` and `,` both just mark a new
+  start (end optional) — neither closes any other still-open clip. `.`
+  always targets the most recently *created* clip: adds an end if it
+  doesn't have one yet, otherwise nudges that same end forward — repeat
+  `.` presses keep adjusting it. `[` jumps to the start of the most recent
+  clip *chronologically* (by start time, not creation order) and plays;
+  `]` jumps to that same clip's end and plays, falling back to its start
+  (same as clicking its end time would) if it has no end yet. `Ctrl+,`
+  (physical Ctrl on both Mac and Windows, not Cmd) sets/updates the most
+  recently *created* clip's start time at the current playback position,
+  creating a brand-new clip first if the video has none yet; `Ctrl+.` does
+  the same for that clip's end time (same underlying handler as `.`).
+  `Shift+,`/`Shift+.` (checked via `e.code` — `Comma`/`Period` — since
+  Shift remaps `e.key` to `<`/`>` on most layouts) nudge that same
+  most-recently-created clip's start/end by 1 second instead of snapping
+  to the current playback position: `Shift+,` moves the start 1 second
+  earlier (creating a brand-new clip at the current time if the video has
+  none yet, same as `Ctrl+,`); `Shift+.` moves the end 1 second later, but
+  only when that clip already has an end — seeing `handleShiftMarkEnd`/
+  `YTM_Bookmarks.shiftRecentClipEnd` in `js/content.js`/`js/bookmarks.js`,
+  it never assigns a *first* end time the way `.`/`Ctrl+.` do. A brief
+  toast (`showToast` in `js/content.js`, its own `#ytm-toast` element,
+  fades in/out on a timer, `pointer-events: none` so it never blocks
+  clicks) confirms every action that adds or updates a clip's *start*
+  time this way — `/`, `,`, `Ctrl+,`, and `Shift+,` — since those are the
+  shortcuts with no other visible feedback at the moment they fire; end-
+  time shortcuts don't toast. The bookmarks panel's toolbar has a ⌨️
+  button (`SHORTCUTS_HELP_TEXT` in `js/content.js`) that's purely a native
+  multi-line `title` tooltip listing every binding above — the only place
+  the Ctrl/Shift ones are documented in the UI itself, since the plain-key
+  buttons' own titles ("Bookmark start (/)" etc.) only cover the unmodified
+  keys. No click behavior; kept in sync by hand with
+  `handleShortcutKeydown` when shortcuts change. `Ctrl+Z`/`Ctrl+Y` undo/
+  redo bookmark edits made through this panel — start/end marks (`/`,
+  `,`, `.`, `Ctrl+,`, `Ctrl+.`, `Shift+,`, `Shift+.`), favorite toggle,
+  a row's mark-start/mark-end/save, delete, the manual add row, and the
+  raw-text editor's Apply. Implemented as two in-memory (per-tab, not
+  Gist-synced) stacks of full pre-mutation clip-array snapshots for the
+  current video — `undoStack`/`redoStack`, `captureUndoSnapshot`/
+  `pushUndoSnapshot`/`performUndo`/`performRedo` in `js/content.js` —
+  rather than per-field diffs, since clip edits are small and this can't
+  drift out of sync with storage. Restoring a snapshot goes through the
+  normal `YTM_Storage.saveBookmarksForVideo`, so an undo/redo syncs to the
+  Gist like any other edit. Both stacks are wiped on navigation
+  (`resetUndoHistory` in `teardown()`) — undo doesn't reach back into a
+  previously-open video's history, which would be confusing since the
+  panel only shows one video at a time. Only actions taken through this
+  in-page panel are tracked; edits made in the popup or the Library page
+  have no undo.
 - **Per-video notes** (`YTM_Row.buildNotesControl` in `js/row.js`, shared
   by the in-page panel, the in-page Playlist panel, and the Library page —
   each just drops the returned element in next to that video's

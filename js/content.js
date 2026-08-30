@@ -3,6 +3,29 @@
   const PLAYLIST_PANEL_ID = 'ytm-playlist-panel';
   const MARKER_LAYER_ID = 'ytm-marker-layer';
   const TOOLTIP_ID = 'ytm-tooltip';
+  const TOAST_ID = 'ytm-toast';
+
+  // Shown as the panel's ⌨️ button's native title tooltip — the one place
+  // every keyboard shortcut is listed together, since the per-button
+  // titles ("Bookmark start (/)" etc.) only cover the plain-key bindings,
+  // not the Ctrl/Shift modifiers. Kept in sync by hand with
+  // handleShortcutKeydown; update both together.
+  const SHORTCUTS_HELP_TEXT = [
+    'Keyboard shortcuts',
+    '/ or ,  — mark a new start',
+    '.  — set/nudge the newest clip’s end',
+    'Ctrl + ,  — update the newest clip’s start (adds one if none yet)',
+    'Ctrl + .  — update the newest clip’s end',
+    'Shift + ,  — shift the newest clip’s start back 1s',
+    'Shift + .  — shift the newest clip’s end forward 1s',
+    '[  — jump to the last clip’s start',
+    ']  — jump to the last clip’s end',
+    'Ctrl + Z  — undo last bookmark change',
+    'Ctrl + Y  — redo',
+    '(disabled while typing in a text field)'
+  ].join('\n');
+
+  const MAX_UNDO_HISTORY = 50;
 
   // Whether the in-page UI (panels + seek-bar markers) is allowed to
   // exist on this page at all — the `extensionEnabled` preference (synced
@@ -20,12 +43,20 @@
   let playQueue = null;
   let playQueueHandler = null;
   let videoEndedHandler = null;
+  let toastHideTimer = null;
 
-  // Keyboard-shortcut state (see handleShortcutStart below): true only when
-  // the most recently opened pending clip was started via ',' rather than
-  // '/', since only a ','-started clip auto-closes on the next '/'/','.
-  // Purely in-memory/per-tab, reset on navigation — not Gist-synced.
-  let commaPendingActive = false;
+  // Undo/redo history for bookmark edits made through this in-page panel
+  // (start/end marks, shifts, favorite/save/delete, manual add, raw
+  // editor apply). Each entry is a full pre-mutation snapshot of one
+  // video's clip array — `{ videoId, categoryId, clips }` — rather than a
+  // diff, since clip mutations are small and infrequent enough that this
+  // is simpler and can't drift out of sync with storage. Purely in-memory
+  // per-tab, not Gist-synced; cleared on navigation (see resetUndoHistory
+  // in teardown(), called on every yt-navigate-finish) since "undo"
+  // jumping back to a previously-open video's earlier state would be
+  // confusing.
+  let undoStack = [];
+  let redoStack = [];
 
   // Playlist panel UI state. The search text, sort mode, and tag filter
   // selection (playlistQuery/playlistVideoSort/playlistTagFilters) are the
@@ -377,18 +408,86 @@
 
   // --- bookmark actions -------------------------------------------------
 
-  async function handleStart() {
-    if (!video || !currentVideoId) return;
-    const meta = readMetadata();
-    await YTM_Bookmarks.addClip(meta, { start: video.currentTime });
+  // --- undo/redo ----------------------------------------------------------
+
+  function resetUndoHistory() {
+    undoStack = [];
+    redoStack = [];
+  }
+
+  async function snapshotClips(videoId, categoryId) {
+    const clips = await YTM_Storage.getBookmarksForVideo(categoryId, videoId);
+    return { videoId, categoryId, clips: JSON.parse(JSON.stringify(clips)) };
+  }
+
+  // Captures the currently open video's clip array *before* a mutation,
+  // resolving its category the same way every mutating YTM_Bookmarks call
+  // already does. Call this first, run the mutation, then hand the result
+  // to pushUndoSnapshot only once the mutation is known to have actually
+  // happened — a no-op action (e.g. a shortcut that found nothing to
+  // update) shouldn't create an undo step.
+  async function captureUndoSnapshot() {
+    if (!currentVideoId) return null;
+    const categoryId = (await YTM_Bookmarks.resolveCategoryForVideo(currentVideoId)) || (await YTM_Storage.getActiveCategoryId());
+    return snapshotClips(currentVideoId, categoryId);
+  }
+
+  function pushUndoSnapshot(snapshot) {
+    if (!snapshot) return;
+    undoStack.push(snapshot);
+    if (undoStack.length > MAX_UNDO_HISTORY) undoStack.shift();
+    redoStack = [];
+  }
+
+  // Every stack entry was captured for whatever video was `currentVideoId`
+  // at the time, and both stacks are wiped on navigation (resetUndoHistory
+  // in teardown()), so a popped snapshot's videoId always still matches
+  // the currently open video — no need to check.
+  async function performUndo() {
+    if (undoStack.length === 0) {
+      showToast('Nothing to undo.');
+      return;
+    }
+    const snapshot = undoStack.pop();
+    const current = await snapshotClips(snapshot.videoId, snapshot.categoryId);
+    await YTM_Storage.saveBookmarksForVideo(snapshot.categoryId, snapshot.videoId, snapshot.clips);
+    redoStack.push(current);
     await refreshPanel();
     scheduleMarkerRender();
+    showToast('Undid the last bookmark change.');
+  }
+
+  async function performRedo() {
+    if (redoStack.length === 0) {
+      showToast('Nothing to redo.');
+      return;
+    }
+    const snapshot = redoStack.pop();
+    const current = await snapshotClips(snapshot.videoId, snapshot.categoryId);
+    await YTM_Storage.saveBookmarksForVideo(snapshot.categoryId, snapshot.videoId, snapshot.clips);
+    undoStack.push(current);
+    await refreshPanel();
+    scheduleMarkerRender();
+    showToast('Redid the last undone bookmark change.');
+  }
+
+  async function handleStart() {
+    if (!video || !currentVideoId) return;
+    const snapshot = await captureUndoSnapshot();
+    const meta = readMetadata();
+    await YTM_Bookmarks.addClip(meta, { start: video.currentTime });
+    pushUndoSnapshot(snapshot);
+    await refreshPanel();
+    scheduleMarkerRender();
+    showToast('Added a new bookmark.');
   }
 
   async function handleEnd() {
     if (!video || !currentVideoId) return;
+    const snapshot = await captureUndoSnapshot();
     const updated = await YTM_Bookmarks.completePendingClip(currentVideoId, video.currentTime);
     if (!updated) return;
+    pushUndoSnapshot(snapshot);
     await refreshPanel();
     scheduleMarkerRender();
   }
@@ -450,23 +549,12 @@
 
   // --- keyboard shortcuts -------------------------------------------------
   //
-  // '/' marks a start (end optional). ',' also marks a start, but flags it
-  // as expecting an end: the *next* '/' or ',' first closes that still-open
-  // clip at the current time (handleEnd), then opens the new one — so a
-  // run of ','-marked clips never leaves more than one open at a time. A
-  // '/'-started clip carries no such expectation and is left open.
+  // '/' and ',' both just mark a new start (end optional); neither closes
+  // any other still-open clip.
   function isTypingTarget(el) {
     if (!el) return false;
     const tag = el.tagName;
     return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
-  }
-
-  async function handleShortcutStart() {
-    if (commaPendingActive) {
-      await handleEnd();
-      commaPendingActive = false;
-    }
-    await handleStart();
   }
 
   // Unlike the panel's "Bookmark end" button (only acts on a still-open
@@ -477,8 +565,54 @@
   // no clips at all.
   async function handleShortcutEnd() {
     if (!video || !currentVideoId) return;
+    const snapshot = await captureUndoSnapshot();
     const updated = await YTM_Bookmarks.setRecentClipEnd(currentVideoId, video.currentTime);
     if (!updated) return;
+    pushUndoSnapshot(snapshot);
+    await refreshPanel();
+    scheduleMarkerRender();
+  }
+
+  // Ctrl+, (physical Ctrl on both Mac and Windows — deliberately not Cmd,
+  // so it doesn't collide with either OS's own shortcuts) targets the
+  // most recently created clip and sets/updates its start time, creating
+  // a brand-new clip first if the video has none yet. Ctrl+. does the
+  // same for that clip's end time — handled by handleShortcutEnd, same as
+  // the plain '.' binding.
+  async function handleCtrlMarkStart() {
+    if (!video || !currentVideoId) return;
+    const snapshot = await captureUndoSnapshot();
+    const { created } = await YTM_Bookmarks.setRecentClipStart(readMetadata(), video.currentTime);
+    pushUndoSnapshot(snapshot);
+    await refreshPanel();
+    scheduleMarkerRender();
+    showToast(created ? 'Added a new bookmark.' : "Updated the last bookmark's start time.");
+  }
+
+  // Shift+, / Shift+. (checked via e.code, since Shift remaps ',' to '<'
+  // and '.' to '>' in e.key on most layouts) nudge the most recently
+  // created clip's start/end by 1 second instead of snapping to the
+  // current playback position: Shift+, moves the start 1 second earlier
+  // (creating a brand-new clip at the current time if the video has none
+  // yet, same as Ctrl+,); Shift+. moves the end 1 second later, but only
+  // when that clip already has an end — see shiftRecentClipEnd.
+  async function handleShiftMarkStart() {
+    if (!video || !currentVideoId) return;
+    const snapshot = await captureUndoSnapshot();
+    const { created } = await YTM_Bookmarks.shiftRecentClipStart(readMetadata(), video.currentTime, -1);
+    pushUndoSnapshot(snapshot);
+    await refreshPanel();
+    scheduleMarkerRender();
+    showToast(created ? 'Added a new bookmark.' : "Shifted the last bookmark's start time back by 1 second.");
+  }
+
+  async function handleShiftMarkEnd() {
+    if (!video || !currentVideoId) return;
+    const snapshot = await captureUndoSnapshot();
+    const maxTime = Number.isFinite(video.duration) ? video.duration : undefined;
+    const updated = await YTM_Bookmarks.shiftRecentClipEnd(currentVideoId, 1, maxTime);
+    if (!updated) return;
+    pushUndoSnapshot(snapshot);
     await refreshPanel();
     scheduleMarkerRender();
   }
@@ -507,23 +641,56 @@
   }
 
   async function handleShortcutKeydown(e) {
-    if (e.repeat || e.ctrlKey || e.altKey || e.metaKey || e.isComposing) return;
+    if (e.repeat || e.altKey || e.metaKey || e.isComposing) return;
     if (isTypingTarget(document.activeElement)) return;
     if (!video || !currentVideoId) return;
+    if (e.ctrlKey) {
+      const key = e.key.toLowerCase();
+      if (key === ',') {
+        e.preventDefault();
+        e.stopPropagation();
+        await handleCtrlMarkStart();
+      } else if (key === '.') {
+        e.preventDefault();
+        e.stopPropagation();
+        await handleShortcutEnd();
+      } else if (key === 'z') {
+        e.preventDefault();
+        e.stopPropagation();
+        await performUndo();
+      } else if (key === 'y') {
+        e.preventDefault();
+        e.stopPropagation();
+        await performRedo();
+      }
+      return;
+    }
+    if (e.shiftKey) {
+      // e.code (physical key) rather than e.key, since Shift remaps the
+      // comma/period keys' e.key to '<'/'>' on most layouts.
+      if (e.code === 'Comma') {
+        e.preventDefault();
+        e.stopPropagation();
+        await handleShiftMarkStart();
+      } else if (e.code === 'Period') {
+        e.preventDefault();
+        e.stopPropagation();
+        await handleShiftMarkEnd();
+      }
+      return;
+    }
     if (e.key === '/') {
       e.preventDefault();
       e.stopPropagation();
-      await handleShortcutStart();
+      await handleStart();
     } else if (e.key === '.') {
       e.preventDefault();
       e.stopPropagation();
       await handleShortcutEnd();
-      commaPendingActive = false;
     } else if (e.key === ',') {
       e.preventDefault();
       e.stopPropagation();
-      await handleShortcutStart();
-      commaPendingActive = true;
+      await handleStart();
     } else if (e.key === '[') {
       e.preventDefault();
       e.stopPropagation();
@@ -538,7 +705,9 @@
   const rowActions = {
     canMarkTime: true,
     onToggleFavorite: async (bookmark) => {
+      const snapshot = await captureUndoSnapshot();
       await YTM_Bookmarks.toggleFavorite(bookmark.id);
+      pushUndoSnapshot(snapshot);
       await refreshPanel();
       scheduleMarkerRender();
     },
@@ -546,31 +715,39 @@
       await playFromPoint(bookmark, point);
     },
     onMarkStart: async (bookmark) => {
+      const snapshot = await captureUndoSnapshot();
       const result = await YTM_Bookmarks.markStart(bookmark.id, video ? video.currentTime : null);
       if (result.ok) {
+        pushUndoSnapshot(snapshot);
         await refreshPanel();
         scheduleMarkerRender();
       }
       return result;
     },
     onMarkEnd: async (bookmark) => {
+      const snapshot = await captureUndoSnapshot();
       const result = await YTM_Bookmarks.markEnd(bookmark.id, video ? video.currentTime : null);
       if (result.ok) {
+        pushUndoSnapshot(snapshot);
         await refreshPanel();
         scheduleMarkerRender();
       }
       return result;
     },
     onSave: async (bookmark, rangeText, notesText) => {
+      const snapshot = await captureUndoSnapshot();
       const result = await YTM_Bookmarks.saveEdits(bookmark.id, rangeText, notesText);
       if (result.ok) {
+        pushUndoSnapshot(snapshot);
         await refreshPanel();
         scheduleMarkerRender();
       }
       return result;
     },
     onDelete: async (bookmark) => {
+      const snapshot = await captureUndoSnapshot();
       await YTM_Bookmarks.remove(bookmark.id);
+      pushUndoSnapshot(snapshot);
       await refreshPanel();
       scheduleMarkerRender();
     }
@@ -626,6 +803,7 @@
             <button type="button" class="ytm-icon-btn-lg ytm-btn-autoplay" title="AutoPlay Bookmark: On — Play jumps between bookmarks and stops after the last one.">▶ On</button>
             <button type="button" class="ytm-icon-btn-lg ytm-btn-raw" title="Raw text editor">📝</button>
             <button type="button" class="ytm-icon-btn-lg ytm-btn-copy" title="Copy this video's bookmarks as text">📋</button>
+            <button type="button" class="ytm-icon-btn-lg ytm-btn-shortcuts" title="${SHORTCUTS_HELP_TEXT}">⌨️</button>
           </div>
         </div>
         <div class="ytm-add-row">
@@ -661,9 +839,11 @@
     const addLabelInput = panel.querySelector('.ytm-add-label-input');
     const addBtn = panel.querySelector('.ytm-add-btn');
     const submitAdd = async () => {
+      const snapshot = await captureUndoSnapshot();
       const meta = readMetadata();
       const result = await YTM_Bookmarks.addManual(meta, addInput.value, addLabelInput.value);
       if (result.ok) {
+        pushUndoSnapshot(snapshot);
         addInput.value = '';
         addLabelInput.value = '';
         await refreshPanel();
@@ -773,7 +953,9 @@
   async function applyRawEditor() {
     const panel = document.getElementById(PANEL_ID);
     const text = panel.querySelector('.ytm-raw-editor').value;
+    const snapshot = await captureUndoSnapshot();
     await YTM_Bookmarks.applyRawText(readMetadata(), text);
+    pushUndoSnapshot(snapshot);
     setRawEditorOpen(false);
     await refreshPanel();
     scheduleMarkerRender();
@@ -1240,6 +1422,30 @@
     if (tip) tip.hidden = true;
   }
 
+  // Brief, non-blocking confirmation for keyboard-shortcut actions that
+  // have no other visible feedback at the moment they fire (e.g. Ctrl+,
+  // while the panel is collapsed or off-screen). Fades in/out on its own
+  // timer and never intercepts clicks (pointer-events: none in CSS), so
+  // it can't get in the way of watching the video.
+  function showToast(message) {
+    clearTimeout(toastHideTimer);
+    let toast = document.getElementById(TOAST_ID);
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.id = TOAST_ID;
+      toast.className = 'ytm-toast';
+      document.body.appendChild(toast);
+    }
+    toast.textContent = message;
+    // Force a reflow so re-triggering the fade-in works even if a toast
+    // is already visible and gets replaced by a fast run of keypresses.
+    void toast.offsetWidth;
+    toast.classList.add('ytm-toast-visible');
+    toastHideTimer = setTimeout(() => {
+      toast.classList.remove('ytm-toast-visible');
+    }, 1800);
+  }
+
   async function renderMarkers() {
     const layer = ensureMarkerLayer();
     if (!layer || !video || !video.duration) return;
@@ -1337,13 +1543,15 @@
     document.getElementById(PLAYLIST_PANEL_ID)?.remove();
     document.getElementById(MARKER_LAYER_ID)?.remove();
     hideTooltip();
+    clearTimeout(toastHideTimer);
+    document.getElementById(TOAST_ID)?.remove();
+    resetUndoHistory();
     if (video) {
       video.removeEventListener('loadedmetadata', renderMarkers);
       if (videoEndedHandler) video.removeEventListener('ended', videoEndedHandler);
       videoEndedHandler = null;
       clearPlayQueue();
     }
-    commaPendingActive = false;
   }
 
   // Bookmarks/tags/videoTags/videoRanks are stored per category, as

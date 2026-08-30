@@ -346,10 +346,10 @@ const YTM_Bookmarks = {
   },
 
   // Like completePendingClip, but targets the most recently created clip
-  // regardless of whether it already has an end — used by the '.' keyboard
-  // shortcut so a repeat press keeps nudging the same clip's end forward
-  // instead of only working once (while it's still "pending"). Returns
-  // null only when the video has no clips at all.
+  // regardless of whether it already has an end — used by the '.' and
+  // Ctrl+. keyboard shortcuts so a repeat press keeps nudging the same
+  // clip's end forward instead of only working once (while it's still
+  // "pending"). Returns null only when the video has no clips at all.
   async setRecentClipEnd(videoId, currentTime) {
     const categoryId = await this.resolveCategoryForVideo(videoId);
     if (!categoryId) return null;
@@ -363,6 +363,90 @@ const YTM_Bookmarks = {
       [start, end] = [end, start];
     }
     clip.startTime = start;
+    clip.endTime = end;
+    clip.updatedAt = Date.now();
+    await YTM_Storage.saveBookmarksForVideo(categoryId, videoId, clips);
+    return clip;
+  },
+
+  // Like setRecentClipEnd, but for the start time — used by the Ctrl+,
+  // keyboard shortcut. Targets the most recently created clip regardless
+  // of whether it already has a start; if the video has no clips at all
+  // yet, creates one instead (unlike setRecentClipEnd, which no-ops on an
+  // empty video since an end with no start makes no sense). Returns
+  // `{ clip, created }` so callers (e.g. the shortcut's toast message) can
+  // tell a brand-new bookmark apart from an update to an existing one.
+  async setRecentClipStart(videoMeta, currentTime) {
+    await this.rememberVideoMeta(videoMeta.videoId, videoMeta.title, videoMeta.channel, videoMeta.channelUrl);
+    const categoryId = (await this.resolveCategoryForVideo(videoMeta.videoId)) || (await YTM_Storage.getActiveCategoryId());
+    const clips = await YTM_Storage.getBookmarksForVideo(categoryId, videoMeta.videoId);
+    if (clips.length === 0) {
+      const clip = this.makeClip({ start: currentTime });
+      clips.push(clip);
+      await YTM_Storage.saveBookmarksForVideo(categoryId, videoMeta.videoId, clips);
+      return { clip, created: true };
+    }
+
+    const clip = clips.slice().sort((a, b) => b.createdAt - a.createdAt)[0];
+    let start = currentTime;
+    let end = clip.endTime;
+    if (end != null && start > end) {
+      [start, end] = [end, start];
+    }
+    clip.startTime = start;
+    clip.endTime = end;
+    clip.updatedAt = Date.now();
+    await YTM_Storage.saveBookmarksForVideo(categoryId, videoMeta.videoId, clips);
+    return { clip, created: false };
+  },
+
+  // Nudges the most recently created clip's start time by deltaSeconds
+  // (negative to move it earlier) — used by the Shift+, keyboard shortcut.
+  // Unlike setRecentClipStart, the new value is relative to the clip's
+  // existing start rather than snapping to currentTime; falls back to
+  // currentTime as the base when the clip somehow has no start yet.
+  // Creates a brand-new clip at currentTime when the video has none at
+  // all, same as setRecentClipStart. Never lets the start go below 0 or
+  // past the clip's own end. Returns `{ clip, created }`.
+  async shiftRecentClipStart(videoMeta, currentTime, deltaSeconds) {
+    await this.rememberVideoMeta(videoMeta.videoId, videoMeta.title, videoMeta.channel, videoMeta.channelUrl);
+    const categoryId = (await this.resolveCategoryForVideo(videoMeta.videoId)) || (await YTM_Storage.getActiveCategoryId());
+    const clips = await YTM_Storage.getBookmarksForVideo(categoryId, videoMeta.videoId);
+    if (clips.length === 0) {
+      const clip = this.makeClip({ start: currentTime });
+      clips.push(clip);
+      await YTM_Storage.saveBookmarksForVideo(categoryId, videoMeta.videoId, clips);
+      return { clip, created: true };
+    }
+
+    const clip = clips.slice().sort((a, b) => b.createdAt - a.createdAt)[0];
+    const base = clip.startTime != null ? clip.startTime : currentTime;
+    let start = Math.max(0, base + deltaSeconds);
+    if (clip.endTime != null && start > clip.endTime) start = clip.endTime;
+    clip.startTime = start;
+    clip.updatedAt = Date.now();
+    await YTM_Storage.saveBookmarksForVideo(categoryId, videoMeta.videoId, clips);
+    return { clip, created: false };
+  },
+
+  // Nudges the most recently created clip's end time by deltaSeconds
+  // (positive to move it later) — used by the Shift+. keyboard shortcut.
+  // Unlike setRecentClipEnd, this never assigns a first end time to a
+  // clip that doesn't have one yet — there's nothing to nudge — so it
+  // no-ops (returns null) for a video with no clips, or whose most recent
+  // clip has no end yet. `maxTime`, when finite, caps the result (e.g. the
+  // video's own duration).
+  async shiftRecentClipEnd(videoId, deltaSeconds, maxTime) {
+    const categoryId = await this.resolveCategoryForVideo(videoId);
+    if (!categoryId) return null;
+    const clips = await YTM_Storage.getBookmarksForVideo(categoryId, videoId);
+    if (clips.length === 0) return null;
+    const clip = clips.slice().sort((a, b) => b.createdAt - a.createdAt)[0];
+    if (clip.endTime == null) return null;
+
+    let end = clip.endTime + deltaSeconds;
+    if (Number.isFinite(maxTime)) end = Math.min(end, maxTime);
+    if (clip.startTime != null && end < clip.startTime) end = clip.startTime;
     clip.endTime = end;
     clip.updatedAt = Date.now();
     await YTM_Storage.saveBookmarksForVideo(categoryId, videoId, clips);
