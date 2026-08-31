@@ -36,34 +36,6 @@ const YTM_Storage = {
     }
   },
 
-  // chrome.storage.sync — account-tied, not device-tied — is only used for
-  // the credentials blob (see getCredentials/getSettings below).
-  async _getSync(key, fallback) {
-    try {
-      const result = await chrome.storage.sync.get(key);
-      return key in result ? result[key] : fallback;
-    } catch (err) {
-      if (ytmIsContextInvalidated(err)) return fallback;
-      throw err;
-    }
-  },
-
-  async _setSync(entry) {
-    try {
-      await chrome.storage.sync.set(entry);
-    } catch (err) {
-      if (!ytmIsContextInvalidated(err)) throw err;
-    }
-  },
-
-  async _removeSync(key) {
-    try {
-      await chrome.storage.sync.remove(key);
-    } catch (err) {
-      if (!ytmIsContextInvalidated(err)) throw err;
-    }
-  },
-
   // --- categories ------------------------------------------------------
   //
   // Bookmarks are now split per category — one Gist file each (see
@@ -284,17 +256,23 @@ const YTM_Storage = {
     await this.touchVideo(categoryId, videoId);
   },
 
-  // --- video info: notes + a synced title/channel/thumbnail snapshot -----
+  // --- video info: notes + alias + favorite + a synced title/channel/
+  // thumbnail snapshot
   //
   // Unlike videoMeta below (a local-only display cache), this is per
-  // category and synced through the Gist — { <videoId>: { notes, title,
-  // channel, channelUrl, thumbnailUrl } }. Notes are the point of this
-  // (so they follow a video across devices), but title/channel/thumbnail
-  // ride along too so a video shows correctly on a device that's never
-  // actually visited it (see YTM_Bookmarks.rememberVideoMeta). Changes
-  // bump the same lastModifiedByVideoId entry as a clip/tag write, so a
-  // video's clips, tags, and notes all merge together as one unit — see
-  // YTM_Gist.mergeVideoData.
+  // category and synced through the Gist — { <videoId>: { notes, alias,
+  // favorite, title, channel, channelUrl, thumbnailUrl } }. Notes, alias,
+  // and favorite are the point of this (so they follow a video across
+  // devices), but title/channel/thumbnail ride along too so a video shows
+  // correctly on a device that's never actually visited it (see
+  // YTM_Bookmarks.rememberVideoMeta). `alias` is a user-chosen display
+  // title for the video — YTM_Bookmarks.saveAlias never stores it equal to
+  // the real YouTube title, so an empty/absent `alias` always means "show
+  // the YouTube title as-is." `favorite` is the whole-video counterpart to
+  // a clip's own `favorite` (in the bookmarks map) — a separate flag, not
+  // derived from any clip. Changes bump the same lastModifiedByVideoId
+  // entry as a clip/tag write, so a video's clips, tags, alias, favorite,
+  // and notes all merge together as one unit — see YTM_Gist.mergeVideoData.
 
   async getAllVideoInfo(categoryId) {
     return this._get(this._catKey('videoInfo', categoryId), {});
@@ -410,29 +388,25 @@ const YTM_Storage = {
     await this.saveVideoRanks(categoryId, { ranks, updatedAt: Date.now() });
   },
 
-  // --- settings: token/gistId (via chrome.storage.sync) + per-device -----
+  // --- settings: token/gistId + per-device sync history -------------------
   //
-  // The token and Gist ID live in chrome.storage.sync, not .local — that's
-  // tied to the browser's signed-in Google account, so signing into the
-  // same account on a different device/browser picks up the same
-  // credentials automatically, and from there the normal Gist-based sync
-  // (js/sync.js) pulls the actual bookmark data down. Everything else
-  // this extension stores stays in .local and syncs (if at all) through
-  // the Gist instead — chrome.storage.sync's ~100KB total/8KB-per-item
-  // quota is fine for two short strings but nowhere near enough for
-  // bookmark data. lastSyncedAt/lastSyncError are each device's own sync
-  // history, not something to share, so they stay in .local.
+  // The token and Gist ID live in chrome.storage.local, entered by hand on
+  // each device/browser — deliberately not chrome.storage.sync, so a token
+  // never travels via the browser's signed-in account. Everything else
+  // this extension stores also stays in .local and syncs (if at all)
+  // through the Gist instead. lastSyncedAt/lastSyncError are each device's
+  // own sync history.
   //
   // getSettings()/saveSettings() merge/split these transparently so every
   // existing call site (which reads/writes token, gistId, lastSyncedAt,
   // and lastSyncError together as one object) keeps working unchanged.
 
   async getCredentials() {
-    return this._getSync('credentials', { token: '', gistId: '' });
+    return this._get('credentials', { token: '', gistId: '' });
   },
 
   async saveCredentials(credentials) {
-    await this._setSync({ credentials: { token: credentials.token || '', gistId: credentials.gistId || '' } });
+    await this._set({ credentials: { token: credentials.token || '', gistId: credentials.gistId || '' } });
   },
 
   async getSettings() {
@@ -460,7 +434,12 @@ const YTM_Storage = {
   async getPreferences() {
     return this._get('preferences', {
       autoplay: true,
-      autosyncEnabled: true,
+      // What Autoplay does once the current video's bookmarks are done:
+      // 'next' jumps to the first bookmark of the next playlist video
+      // (the original/default behavior), 'loop' restarts this video's own
+      // first bookmark instead of leaving it, and 'pause' just stops there
+      // — no jump, no loop. See applyAutoplayEndOfQueue in content.js.
+      autoplayEndBehavior: 'next',
       extensionEnabled: true,
       panelCollapsed: false,
       playlistCollapsed: false,
@@ -494,20 +473,18 @@ const YTM_Storage = {
   // Everything this extension keeps in chrome.storage.local: synced data
   // (bookmarks/tags/videoTags/lastModifiedByVideoId/videoRanks for every
   // category, plus the category list itself and preferences), local-only
-  // caches (videoMeta, pendingPlay), and per-device settings (lastSyncedAt/
-  // lastSyncError) — plus the token/gistId credentials in chrome.storage.sync
-  // (see getCredentials), since this account-wide wipe should log every
-  // device out of the Gist too, not just this one. Does not touch the Gist
-  // itself — the caller is expected to delete that separately via
+  // caches (videoMeta, pendingPlay), per-device settings (lastSyncedAt/
+  // lastSyncError), and the token/gistId credentials. Does not touch the
+  // Gist itself — the caller is expected to delete that separately via
   // YTM_Gist.deleteGist first.
   async clearAllLocalData() {
     const categories = await this.getCategories();
     const perCategoryBases = ['bookmarks', 'lastModifiedByVideoId', 'tags', 'tagsLastModified', 'pendingTagDeletions', 'videoTags', 'videoRanks', 'videoInfo'];
-    const keys = ['categories', 'categoriesLastModified', 'pendingCategoryDeletions', 'activeCategoryId', 'preferences', 'videoMeta', 'pendingPlay', 'settings'];
+    const keys = ['categories', 'categoriesLastModified', 'pendingCategoryDeletions', 'activeCategoryId', 'preferences', 'videoMeta', 'pendingPlay', 'settings', 'credentials'];
     for (const cat of categories) {
       for (const base of perCategoryBases) keys.push(this._catKey(base, cat.id));
     }
-    await Promise.all([this._remove(keys), this._removeSync('credentials')]);
+    await this._remove(keys);
   },
 
   // --- data-only wipe (Settings page "delete data only, keep token/Gist") -

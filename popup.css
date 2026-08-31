@@ -67,6 +67,12 @@ button.danger { color: #dc2626; border-color: #dc2626; }
 .video-meta a { color: var(--fg); text-decoration: none; font-weight: 600; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .video-meta a:hover { text-decoration: underline; }
 .video-channel { display: block; color: var(--muted); font-size: 11px; }
+/* With an alias set, .ytm-title-display holds the alias (using the same
+   bold look as .video-meta a above) followed by the real YouTube title in
+   this smaller/muted style directly underneath, so the two — and the
+   channel line below both — are never mistaken for one another. With no
+   alias it holds just the plain title link, unchanged from before. */
+.ytm-original-title { font-weight: 400; font-style: italic; font-size: 11px; color: var(--muted); margin-top: 1px; }
 
 /* Manual add row */
 .ytm-add-row { display: flex; gap: 6px; margin-bottom: 6px; }
@@ -127,6 +133,8 @@ button.danger { color: #dc2626; border-color: #dc2626; }
 .ytm-mark-btn { padding: 3px 6px; min-width: 18px; font-size: 13px; font-weight: 700; line-height: 1; }
 .ytm-star { color: var(--muted); }
 .ytm-star.active { color: #f5b400; }
+.ytm-video-star { color: var(--muted); }
+.ytm-video-star.active { color: #f5b400; }
 .ytm-notes-wrap { display: inline-flex; }
 .ytm-notes-btn.active { border-color: var(--accent); color: var(--accent); }
 /* left/top/width are set inline by positionEditor() in js/row.js — this
@@ -161,6 +169,34 @@ button.danger { color: #dc2626; border-color: #dc2626; }
   color: var(--fg);
   font-size: 12px;
   resize: vertical;
+}
+.ytm-alias-wrap { display: inline-flex; }
+.ytm-alias-btn.active { border-color: var(--accent); color: var(--accent); }
+/* Mirrors .ytm-notes-editor-wrap — see buildAliasControl in js/row.js for
+   why this is positioned inline via JS instead of anchored in CSS. */
+.ytm-alias-editor-wrap {
+  position: absolute;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+.ytm-alias-editor-wrap[hidden] {
+  display: none;
+}
+.ytm-alias-editor {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 12px;
 }
 .ytm-icon-btn.dirty,
 .ytm-range-input.dirty,

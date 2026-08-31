@@ -2,6 +2,25 @@ function ytmGenerateTagId() {
   return (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
 }
 
+// A new tag's custom-order position: past every explicitly ordered tag,
+// so it lands at the end of the custom order instead of colliding with
+// (or sorting ahead of) whatever's already there.
+function ytmNextOrder(existingTags) {
+  const orders = existingTags.map((t) => t.order).filter((o) => typeof o === 'number');
+  return orders.length > 0 ? Math.max(...orders) + 1 : existingTags.length;
+}
+
+// Tags never explicitly reordered (created before this feature existed,
+// or never moved) have no `order` field — fall back to name so they
+// still sort deterministically among themselves and consistently across
+// devices, rather than depending on object insertion order.
+function ytmCompareTagOrder(a, b) {
+  const ao = typeof a.order === 'number' ? a.order : Number.MAX_SAFE_INTEGER;
+  const bo = typeof b.order === 'number' ? b.order : Number.MAX_SAFE_INTEGER;
+  if (ao !== bo) return ao - bo;
+  return a.name.localeCompare(b.name);
+}
+
 // Tags are scoped per category — each category has its own independent
 // tag list (see CLAUDE.md) — so every method here takes the categoryId to
 // operate on. Callers (js/manage.js) always pass the Library page's
@@ -36,7 +55,8 @@ const YTM_Tags = {
       modified: (a, b) => (b.updatedAt || 0) - (a.updatedAt || 0),
       added: (a, b) => (b.createdAt || 0) - (a.createdAt || 0),
       tagged: (a, b) => b.lastTaggedAt - a.lastTaggedAt,
-      mostTagged: (a, b) => b.count - a.count
+      mostTagged: (a, b) => b.count - a.count,
+      custom: ytmCompareTagOrder
     };
     return withStats.sort(sorters[sortBy] || sorters.az);
   },
@@ -49,11 +69,47 @@ const YTM_Tags = {
       return { ok: false, message: 'That tag already exists.' };
     }
     const now = Date.now();
-    const tag = { id: ytmGenerateTagId(), name: trimmed, createdAt: now, updatedAt: now };
+    const tag = { id: ytmGenerateTagId(), name: trimmed, createdAt: now, updatedAt: now, order: ytmNextOrder(tags) };
     tags.push(tag);
     await YTM_Storage.saveTags(categoryId, tags);
     await YTM_Storage.touchTag(categoryId, tag.id);
     return { ok: true, id: tag.id, name: tag.name };
+  },
+
+  // Swaps this tag with its neighbor in the current custom order
+  // (direction: 'up' or 'down'), a no-op at either edge. `order` is a
+  // plain per-tag field — like `name`/`updatedAt` — so it rides through
+  // the exact same per-id whole-record merge YTM_Gist.mergeTagData
+  // already does for everything else about a tag; no separate synced
+  // blob (the way video ranks need one — see YTM_Storage.saveVideoRanks)
+  // is needed here. Tags never explicitly ordered yet (or created before
+  // this feature existed) fall back to name order in ytmCompareTagOrder,
+  // so the very first move in a category assigns every tag a dense
+  // 0..N-1 `order` in one pass; every move after that only touches the
+  // two tags that actually swapped, since the rest already hold stable
+  // sequential values. Deliberately only bumps tagsLastModified (via
+  // touchTag) for tags whose order actually changed, not their own
+  // `updatedAt` — so reordering doesn't quietly contaminate the
+  // "Recently Modified" sort with unrelated tags.
+  async moveTag(categoryId, id, direction) {
+    const tags = await YTM_Storage.getTags(categoryId);
+    const ordered = tags.slice().sort(ytmCompareTagOrder);
+    const index = ordered.findIndex((t) => t.id === id);
+    if (index === -1) return { ok: false, message: 'Tag not found.' };
+    const swapWith = direction === 'up' ? index - 1 : index + 1;
+    if (swapWith < 0 || swapWith >= ordered.length) return { ok: true };
+    [ordered[index], ordered[swapWith]] = [ordered[swapWith], ordered[index]];
+
+    const changedIds = [];
+    ordered.forEach((tag, i) => {
+      if (tag.order !== i) {
+        tag.order = i;
+        changedIds.push(tag.id);
+      }
+    });
+    await YTM_Storage.saveTags(categoryId, tags);
+    for (const changedId of changedIds) await YTM_Storage.touchTag(categoryId, changedId);
+    return { ok: true };
   },
 
   // Renames the tag in place (its id — and so every video's assignment to

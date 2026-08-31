@@ -21,11 +21,9 @@
       Create a token at
       <a href="https://github.com/settings/tokens/new?scopes=gist&description=YouTube%20Manager" target="_blank" rel="noopener">github.com/settings/tokens</a>
       with only the <strong>gist</strong> scope. The token and Gist ID are
-      stored in <code>chrome.storage.sync</code> — tied to your signed-in
-      Chrome/Google account, not just this browser — so signing into the
-      same account on another device or browser fills these in
-      automatically and that device starts pulling your bookmarks from the
-      same Gist. They're only ever sent to api.github.com otherwise.
+      stored locally in this browser only — enter them again on each
+      device/browser you use. They're only ever sent to api.github.com
+      otherwise.
     </p>
 
     <label>
@@ -38,13 +36,9 @@
       <input type="text" id="gistIdInput" placeholder="auto-created on first sync">
     </label>
 
-    <label class="checkbox-row">
-      <input type="checkbox" id="autosyncEnabledInput" checked>
-      Sync automatically (on every change, and every 5 minutes)
-    </label>
     <p class="hint">
-      Turn off to only sync when you click "⟲ Sync" yourself. This
-      preference syncs across your devices too.
+      Syncs automatically a couple of seconds after any change, and "⟲
+      Sync" (popup or Library page) triggers one immediately.
     </p>
 
     <div class="button-row">

@@ -29,6 +29,18 @@
   flex-wrap: wrap;
   min-width: 0;
 }
+.ytm-panel-toggle-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.ytm-panel-total-duration {
+  color: var(--yt-spec-text-secondary, #909090);
+  font-size: 11px;
+  white-space: nowrap;
+}
 .ytm-panel-toggle-actions {
   display: flex;
   align-items: center;
@@ -210,6 +222,12 @@
 .ytm-star.active {
   color: #f5b400;
 }
+.ytm-video-star {
+  color: var(--yt-spec-text-secondary, #909090);
+}
+.ytm-video-star.active {
+  color: #f5b400;
+}
 .ytm-notes-wrap {
   display: inline-flex;
 }
@@ -263,6 +281,45 @@ html[dark] .ytm-notes-editor-wrap {
 }
 .ytm-notes-reset {
   align-self: flex-end;
+}
+.ytm-alias-wrap {
+  display: inline-flex;
+}
+.ytm-alias-btn.active {
+  border-color: var(--yt-spec-call-to-action, #3ea6ff);
+  color: var(--yt-spec-call-to-action, #3ea6ff);
+}
+/* Mirrors .ytm-notes-editor-wrap — see buildAliasControl in js/row.js for
+   why this is positioned inline via JS instead of anchored in CSS. */
+.ytm-alias-editor-wrap {
+  position: absolute;
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid rgba(128, 128, 128, 0.3);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #0f0f0f;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+html[dark] .ytm-alias-editor-wrap {
+  background: #212121;
+  color: #f1f1f1;
+  border-color: rgba(255, 255, 255, 0.2);
+}
+.ytm-alias-editor-wrap[hidden] {
+  display: none;
+}
+.ytm-alias-editor {
+  width: 100%;
+  border: 1px solid rgba(128, 128, 128, 0.3);
+  border-radius: 6px;
+  padding: 6px 8px;
+  background: transparent;
+  color: inherit;
+  font: 12px/1.4 Roboto, Arial, sans-serif;
 }
 .ytm-icon-btn.dirty,
 .ytm-range-input.dirty,
@@ -345,32 +402,129 @@ html[dark] .ytm-notes-editor-wrap {
   position: absolute;
   inset: 0;
   z-index: 30;
+  /* Doesn't cover the bar for pointer purposes — only a clip's own
+     .ytm-marker-pointer flag is pointer-events: auto, so YouTube's own
+     hover/scrub-preview behaves normally everywhere else on the bar. */
+  pointer-events: none;
 }
-.ytm-marker-group {
+/* Decorative range underlay bridging a clip's start/end flags — shows
+   the covered span clearly (bracket-edge borders on both sides echo the
+   flags right at the points they mark) but never intercepts anything
+   (see .ytm-marker-layer above); the flags are the only interactive
+   elements. */
+.ytm-marker-range {
   position: absolute;
   top: -3px;
   bottom: -3px;
-  min-width: 3px;
-  background: rgba(62, 166, 255, 0.55);
-  border-top: 3px solid #3ea6ff;
-  border-bottom: 3px solid #3ea6ff;
+  box-sizing: border-box;
+  background: rgba(255, 214, 0, 0.35);
+  border-left: 2px solid #ffd600;
+  border-right: 2px solid #ffd600;
+  pointer-events: none;
+}
+.ytm-marker-range.favorite {
+  background: rgba(245, 180, 0, 0.4);
+  border-left-color: #f5b400;
+  border-right-color: #f5b400;
+}
+/* The hoverable/clickable target(s) per clip — one at its start time, and
+   (see .end below) a second at its end time when it has one, together
+   bracketing the range underlay above like `[range]`. Each looks like an
+   actual flag on a pole planted in the seek bar: a 2px pole the full
+   height of the element, topped with a 20x20px triangular pennant that
+   points right (into the range that follows) for a start flag, or left
+   (into the range that precedes it) for an end flag — see .end below.
+   `clip-path` cuts the element down to exactly that pole+pennant
+   silhouette — a `polygon()` naming the same coordinates the pennant's
+   apex/base sit at — so the flag's *paint* and its *hit-test area* are
+   the same shape: hovering/clicking only registers on the actual visible
+   triangle+pole, not a generic padded box around it. That's what makes
+   two flags landing close together on the bar resolvable by which one's
+   triangle is actually under the pointer, rather than whichever DOM
+   element happens to paint on top — see also staggerMarkerPointer in
+   js/content.js, which nudges a flag's pole shorter when two points
+   round to close enough pixels that their triangles would otherwise
+   still overlap outright. Color comes from `color`/currentColor
+   (`background: currentColor`, clipped to the polygon) so the favorite/
+   no-end variants only need to override one property. */
+.ytm-marker-pointer {
+  position: absolute;
+  top: -40px;
+  bottom: -3px;
+  width: 25px;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: currentColor;
+  color: #ffd600;
   cursor: pointer;
   pointer-events: auto;
-  transition: background 0.1s ease, transform 0.1s ease;
+  z-index: 1;
+  clip-path: polygon(3px 0, 5px 0, 25px 10px, 5px 20px, 5px 100%, 3px 100%);
+  transform: translateX(-4px);
+  filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.6));
+  transition: filter 0.1s ease, top 0.1s ease;
 }
-.ytm-marker-group:hover {
-  background: rgba(62, 166, 255, 0.8);
-  transform: scaleY(1.15);
+.ytm-marker-pointer.end {
+  clip-path: polygon(22px 0, 20px 0, 0 10px, 20px 20px, 20px 100%, 22px 100%);
+  transform: translateX(-21px);
 }
-.ytm-marker-group.pending {
-  background: transparent;
-  border-top-color: #ffb300;
-  border-bottom-color: #ffb300;
-  width: 4px !important;
+.ytm-marker-pointer:hover {
+  filter: brightness(1.25) drop-shadow(0 0 1px rgba(0, 0, 0, 0.6));
 }
-.ytm-marker-group.favorite {
-  border-top-color: #f5b400;
-  border-bottom-color: #f5b400;
+/* Applied while this flag is in click-to-drag mode (see startMarkerFlagDrag
+   in js/content.js) — brighter than even the hover state, and raised above
+   its own transition delay, so it's obvious at a glance which flag is
+   currently following the pointer versus just being hovered. */
+.ytm-marker-pointer.dragging {
+  filter: brightness(1.5) drop-shadow(0 0 3px rgba(0, 0, 0, 0.7));
+  transition: none;
+  z-index: 2;
+}
+.ytm-marker-pointer.favorite {
+  color: #f5b400;
+}
+/* A clip with no end yet is just a single point in time, not one edge of
+   a bracketed range — a round-tipped pointer (pole + circular head, the
+   pre-flag look) rather than a directional triangle, since there's no
+   "into the range" to point toward, plus a shade more orange so it's
+   clear on sight which clips are still open-ended. Not clip-path'd like
+   the flag shapes above (there's no overlapping-triangle ambiguity to
+   resolve for a single, un-paired point) — the pole/head are drawn by
+   pseudo-elements instead, with the plain rectangular box beneath them
+   as the hit area, the same as before flags existed. */
+.ytm-marker-pointer.no-end {
+  width: 12px;
+  transform: translateX(-6px);
+  clip-path: none;
+  background: none;
+  color: #ffa726;
+}
+.ytm-marker-pointer.no-end::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  transform: translateX(-50%);
+  background: currentColor;
+}
+.ytm-marker-pointer.no-end::before {
+  content: '';
+  position: absolute;
+  top: -1px;
+  left: 50%;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  transform: translateX(-50%);
+  background: currentColor;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+.ytm-marker-pointer.no-end.favorite {
+  color: #fb8c00;
 }
 
 /* Playlist panel */
@@ -569,6 +723,25 @@ html[dark] .ytm-notes-editor-wrap {
 }
 .ytm-playlist-title:hover {
   color: var(--yt-spec-call-to-action, #3ea6ff);
+}
+/* With an alias set, .ytm-playlist-title-block holds the alias (using
+   the same bold .ytm-playlist-title look above) followed by the real
+   YouTube title in this smaller/muted style directly underneath, so the
+   two are never mistaken for one another; with no alias it holds just
+   the plain title link. */
+.ytm-playlist-original-title {
+  display: block;
+  color: var(--yt-spec-text-secondary, #909090);
+  font-size: 11px;
+  font-style: italic;
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 1px;
+}
+.ytm-playlist-original-title:hover {
+  text-decoration: underline;
 }
 .ytm-playlist-sub {
   color: var(--yt-spec-text-secondary, #909090);

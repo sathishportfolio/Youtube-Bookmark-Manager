@@ -5,6 +5,19 @@
 // own next sync), except deletion here is blocked outright while the
 // category still has videos in it — unlike a tag, a category is an entire
 // Gist file's worth of data, so there's no safe "just drop it" default.
+// The Default category is always pinned first (see getAll/moveCategory);
+// every other category falls back to name order until it's ever been
+// explicitly moved, the same fallback YTM_Tags.ytmCompareTagOrder uses
+// for tags.
+function ytmCompareCategoryOrder(a, b) {
+  if (a.id === YTM_Storage.DEFAULT_CATEGORY_ID) return -1;
+  if (b.id === YTM_Storage.DEFAULT_CATEGORY_ID) return 1;
+  const ao = typeof a.order === 'number' ? a.order : Number.MAX_SAFE_INTEGER;
+  const bo = typeof b.order === 'number' ? b.order : Number.MAX_SAFE_INTEGER;
+  if (ao !== bo) return ao - bo;
+  return a.name.localeCompare(b.name);
+}
+
 const YTM_Categories = {
   async getAll() {
     const categories = await YTM_Storage.getCategories();
@@ -15,11 +28,41 @@ const YTM_Categories = {
         return { ...c, videoCount };
       })
     );
-    return withCounts.sort((a, b) => {
-      if (a.id === YTM_Storage.DEFAULT_CATEGORY_ID) return -1;
-      if (b.id === YTM_Storage.DEFAULT_CATEGORY_ID) return 1;
-      return a.name.localeCompare(b.name);
+    return withCounts.sort(ytmCompareCategoryOrder);
+  },
+
+  // Swaps this category with its neighbor in the current order
+  // (direction: 'up' or 'down') among every *non-Default* category — the
+  // Default category always stays pinned first (see getAll above) and
+  // can't itself be moved. `order` is a plain per-category field, so it
+  // rides through the same per-id whole-record merge
+  // YTM_Gist.mergeCategories already does for everything else about a
+  // category — mirrors YTM_Tags.moveTag exactly, see the comment there
+  // for why a plain field (not a separate synced blob like video ranks)
+  // is the right shape here, and why only the categories that actually
+  // swapped get touched (not every category's own `updatedAt`).
+  async moveCategory(id, direction) {
+    if (id === YTM_Storage.DEFAULT_CATEGORY_ID) {
+      return { ok: false, message: 'The Default category always stays first.' };
+    }
+    const categories = await YTM_Storage.getCategories();
+    const movable = categories.filter((c) => c.id !== YTM_Storage.DEFAULT_CATEGORY_ID).sort(ytmCompareCategoryOrder);
+    const index = movable.findIndex((c) => c.id === id);
+    if (index === -1) return { ok: false, message: 'Category not found.' };
+    const swapWith = direction === 'up' ? index - 1 : index + 1;
+    if (swapWith < 0 || swapWith >= movable.length) return { ok: true };
+    [movable[index], movable[swapWith]] = [movable[swapWith], movable[index]];
+
+    const changedIds = [];
+    movable.forEach((cat, i) => {
+      if (cat.order !== i) {
+        cat.order = i;
+        changedIds.push(cat.id);
+      }
     });
+    await YTM_Storage.saveCategories(categories);
+    for (const changedId of changedIds) await YTM_Storage.touchCategory(changedId);
+    return { ok: true };
   },
 
   // Uniqueness is checked by Gist filename slug (see
@@ -37,7 +80,12 @@ const YTM_Categories = {
     }
     const now = Date.now();
     const id = crypto.randomUUID ? crypto.randomUUID() : `${now}-${Math.random().toString(36).slice(2)}`;
-    const category = { id, name: trimmed, createdAt: now, updatedAt: now };
+    const movableOrders = categories
+      .filter((c) => c.id !== YTM_Storage.DEFAULT_CATEGORY_ID)
+      .map((c) => c.order)
+      .filter((o) => typeof o === 'number');
+    const order = movableOrders.length > 0 ? Math.max(...movableOrders) + 1 : categories.length;
+    const category = { id, name: trimmed, createdAt: now, updatedAt: now, order };
     categories.push(category);
     await YTM_Storage.saveCategories(categories);
     await YTM_Storage.touchCategory(id);

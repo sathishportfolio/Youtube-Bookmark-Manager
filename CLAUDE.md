@@ -21,9 +21,71 @@ to work from.
   everything below it; that collapsed state is a Gist-synced preference
   (`panelCollapsed`), so it's consistent across devices — see
   `refreshPreferencesUI`/`togglePanelCollapsed` in `js/content.js`.
-- A video can have multiple bookmarked clips. Start/end times are shown as
-  dominant, hoverable markers directly on the YouTube seek bar (tooltip with
-  time range + notes; click to play that range).
+- A video can have multiple bookmarked clips, each shown on the YouTube
+  seek bar via one or two yellow flags built by `buildMarkerPointer` in
+  `js/content.js`: a clip with an end time gets a flag at *both* its
+  start and end, bridged by a thin `.ytm-marker-range` underlay between
+  them so the covered span reads clearly as one bracketed range —
+  `[range]` — with bracket-edge borders on the underlay meeting the
+  flags right at the points they mark; a clip with no end yet gets just
+  the one start flag, round-tipped (`.no-end` in content.css — a pole +
+  circular head via `::before`/`::after`, the pre-flag look, rather than
+  a directional pennant, since there's no "into the range" for it to
+  point toward) and tinted a shade more orange, so it's visually obvious
+  at a glance which clips are still a single point in time rather than
+  one edge of a range. A ranged clip's two flags (`.ytm-marker-pointer`,
+  not `.no-end`) actually look like a flag on a pole — a 2px pole the
+  full height of the element topped with a 10×10px triangular pennant
+  pointing right (start, into the range that follows) or left (`.end`,
+  into the range that precedes it) — via a single `clip-path:
+  polygon(...)` that cuts the element down to exactly that silhouette,
+  painted with `background: currentColor`. Cutting the *hit-test area*
+  down to the same shape as the *paint* (not a generic padded box) is
+  what makes two flags landing close together on the bar resolvable by
+  which one's actual triangle is under the pointer, rather than
+  whichever DOM element happens to be topmost; `staggerMarkerPointer`
+  goes a step further and shortens a flag's pole a bit for each
+  subsequent point that rounds to the same ~10px bucket
+  (`MARKER_STAGGER_PX`) on the bar, so near-identical-time points don't
+  even have overlapping triangles to begin with. Each flag is
+  independently hoverable (tooltip: time range + label) and clickable —
+  start plays chained into later bookmarks per Autoplay same as
+  `playFromBookmark`, end jumps-and-plays with no chaining, mirroring
+  the exact same split a row's own clickable start/end timestamps use
+  (`playFromPoint`). Flags stick up above the bar, so each is an easy,
+  consistent target regardless of clip length or video duration.
+  The range underlay and the `#ytm-marker-layer` itself are
+  `pointer-events: none`; only the flags are `auto`. That split matters
+  beyond just precision: YouTube's own scrub-preview thumbnail is
+  triggered by a listener on the progress-bar *container*, which still
+  fires on bubbling regardless of what a descendant painted on top of it
+  — so covering the whole bar (or even just a clip's range) with a
+  hoverable layer, as an earlier version of this did, doesn't actually
+  stop YouTube's preview from fighting with our tooltip. Each flag stops
+  every event in `STOP_PROPAGATION_EVENTS` (mouse *and* pointer variants)
+  right at itself, so hovering/clicking it never bubbles to that
+  container listener — YouTube's native hover/preview keeps working
+  completely normally everywhere else on the bar, and only the flags
+  override it.
+  A single clip's duration
+  (`YTM_Bookmarks.durationLabel`) shows next to its range wherever a clip
+  row renders one (`.ytm-duration` in `js/row.js`'s `_buildRangeDisplay`);
+  a video's *total* across every clip that has an end time set
+  (`YTM_Bookmarks.totalDurationLabel` — open-ended clips don't contribute,
+  since there's nothing to measure) shows next to its bookmark count on
+  the Library page and the in-page Playlist panel (e.g. "3 bookmarks ·
+  12min total"), omitted entirely when no clip on the video has an end
+  time yet. The in-page bookmark panel — the video's own, currently-
+  playing one — shows the same total on its own for the current video,
+  as a `.ytm-panel-total-duration` span in the collapse toggle row (next
+  to "🔖 Bookmarks ▾", inside a `.ytm-panel-toggle-left` wrapper so it
+  sits with the toggle button rather than drifting to the row's
+  `space-between` middle) — set in `refreshPanel()`, so it's always
+  current and stays visible even while the panel itself is collapsed.
+  All three share one `formatDurationSeconds` formatter (top two
+  non-zero units — hr+min or min+sec — dropping seconds once hours are
+  involved) so a clip's duration and a video's total always read the same
+  way.
 - `js/row.js` exports two renderers: `render` (full — in-page panel and an
   expanded video in the Library page) and `renderMinimal` (popup, and a
   collapsed Library video shows neither — just its header). Full rows
@@ -60,29 +122,39 @@ to work from.
   recently *created* clip's start time at the current playback position,
   creating a brand-new clip first if the video has none yet; `Ctrl+.` does
   the same for that clip's end time (same underlying handler as `.`).
-  `Shift+,`/`Shift+.` (checked via `e.code` — `Comma`/`Period` — since
-  Shift remaps `e.key` to `<`/`>` on most layouts) nudge that same
-  most-recently-created clip's start/end by 1 second instead of snapping
-  to the current playback position: `Shift+,` moves the start 1 second
-  earlier (creating a brand-new clip at the current time if the video has
-  none yet, same as `Ctrl+,`); `Shift+.` moves the end 1 second later, but
-  only when that clip already has an end — seeing `handleShiftMarkEnd`/
-  `YTM_Bookmarks.shiftRecentClipEnd` in `js/content.js`/`js/bookmarks.js`,
-  it never assigns a *first* end time the way `.`/`Ctrl+.` do. A brief
-  toast (`showToast` in `js/content.js`, its own `#ytm-toast` element,
-  fades in/out on a timer, `pointer-events: none` so it never blocks
-  clicks) confirms every action that adds or updates a clip's *start*
-  time this way — `/`, `,`, `Ctrl+,`, and `Shift+,` — since those are the
-  shortcuts with no other visible feedback at the moment they fire; end-
-  time shortcuts don't toast. The bookmarks panel's toolbar has a ⌨️
-  button (`SHORTCUTS_HELP_TEXT` in `js/content.js`) that's purely a native
+  `Shift+,`/`Shift+.` and `Ctrl+Shift+,`/`Ctrl+Shift+.` (checked via
+  `e.code` — `Comma`/`Period` — since Shift remaps `e.key` to `<`/`>` on
+  most layouts) nudge that same most-recently-created clip's start or end
+  by 1 second instead of snapping to the current playback position, with
+  the Shift-only pair controlling the start and the Ctrl+Shift pair
+  controlling the end: `Shift+,` moves the start 1 second earlier
+  (creating a brand-new clip at the current time if the video has none
+  yet, same as `Ctrl+,`) and `Shift+.` moves that same start 1 second
+  later; `Ctrl+Shift+,`/`Ctrl+Shift+.` do the equivalent for the end time
+  — back/forward 1 second — but only when that clip already has an end —
+  see `handleShiftMarkStart`/`handleShiftMarkEnd`/
+  `YTM_Bookmarks.shiftRecentClipStart`/`shiftRecentClipEnd` in
+  `js/content.js`/`js/bookmarks.js`; the end pair never assigns a *first*
+  end time the way `.`/`Ctrl+.` do. `Ctrl+Shift+,`/`Ctrl+Shift+.` are
+  checked *before* the plain-`Ctrl` branch in `handleShortcutKeydown`, so
+  they're their own bindings rather than a Shift-modified version of
+  plain `Ctrl+,`/`Ctrl+.` (which set the start/end to the current
+  playback position, not nudge it). A brief toast (`showToast` in
+  `js/content.js`, its own `#ytm-toast` element, fades in/out on a timer,
+  `pointer-events: none` so it never blocks clicks) confirms every action
+  that adds or updates a clip's *start* time this way — `/`, `,`,
+  `Ctrl+,`, `Shift+,`, and `Shift+.` — since those are the shortcuts with
+  no other visible feedback at the moment they fire; end-time shortcuts
+  don't toast. The bookmarks panel's toolbar has a ⌨️ button
+  (`SHORTCUTS_HELP_TEXT` in `js/content.js`) that's purely a native
   multi-line `title` tooltip listing every binding above — the only place
   the Ctrl/Shift ones are documented in the UI itself, since the plain-key
   buttons' own titles ("Bookmark start (/)" etc.) only cover the unmodified
   keys. No click behavior; kept in sync by hand with
   `handleShortcutKeydown` when shortcuts change. `Ctrl+Z`/`Ctrl+Y` undo/
   redo bookmark edits made through this panel — start/end marks (`/`,
-  `,`, `.`, `Ctrl+,`, `Ctrl+.`, `Shift+,`, `Shift+.`), favorite toggle,
+  `,`, `.`, `Ctrl+,`, `Ctrl+.`, `Shift+,`, `Shift+.`, `Ctrl+Shift+,`,
+  `Ctrl+Shift+.`), favorite toggle,
   a row's mark-start/mark-end/save, delete, the manual add row, and the
   raw-text editor's Apply. Implemented as two in-memory (per-tab, not
   Gist-synced) stacks of full pre-mutation clip-array snapshots for the
@@ -133,12 +205,57 @@ to work from.
   Playlist panel and Library page fall back to their normal full
   re-render — so a note saved in one place shows up in every other
   open page/tab without needing a manual refresh.
+- **Per-video alias** (a user-chosen display title): the same
+  `videoInfo::<categoryId>` record notes lives in also carries `alias`.
+  `YTM_Row.buildAliasControl` in `js/row.js` is a 🏷️ button + single-line
+  inline editor, shared by the in-page panel, the in-page Playlist panel,
+  and the Library page, built on the exact same self-contained/floating-
+  editor/outside-click-to-save mechanics as `buildNotesControl` (see
+  above) — just a text `<input>` instead of a textarea. It reads/writes
+  through `YTM_Bookmarks.getVideoInfo`/`saveAlias`. `saveAlias` never
+  actually stores an alias equal to the real YouTube title (trimmed,
+  compared against the cached `videoMeta.title`) — so "no alias set" and
+  "alias same as the YouTube title" are the same empty-string state, and
+  every display site only ever needs to check "is `alias` non-empty" to
+  decide whether to show it; none of them re-derive the comparison
+  themselves. Where a video's title is actually rendered (Library page
+  and popup via `YTM_Row.buildTitleDisplay`; the in-page Playlist panel
+  inlines the same pattern itself since its title is also a "play the
+  first bookmark" button, not a plain link) — a set alias becomes the
+  bold clickable heading, with the real YouTube title shown in a smaller/
+  muted line directly underneath it, both still linking/behaving the same
+  as the title always did; with no alias, it's just the plain title,
+  pixel-identical to before this feature existed. The channel line always
+  renders separately, in its own pre-existing style, immediately below
+  that block, so alias/title/channel stay visually distinct rather than
+  blurring together. The in-page bookmark panel (the video's own,
+  currently-playing one) never renders a title/channel at all — YouTube's
+  own page chrome already shows those — so there's no alias display there
+  either, only the 🏷️ editor button. The popup is display-only (no 🏷️
+  button, matching its existing minimal/no-notes-editing pattern) — it
+  still shows the alias next to the title, just can't set one; use the
+  Library page or in-page Playlist panel for that. Search (Library page
+  and Playlist panel) matches against `alias` alongside `title`/`channel`/
+  clip labels.
+- **Per-video favorite**: the same `videoInfo::<categoryId>` record also
+  carries a whole-video `favorite` flag — a separate thing from a clip's
+  own `favorite` (in the bookmarks map), which marks one clip within a
+  video. `YTM_Row.buildVideoFavoriteToggle` in `js/row.js` is a ★/☆
+  button, shared by the Library page and the in-page Playlist panel;
+  unlike the alias/notes controls there's no editor popover for a single
+  boolean, so it just flips (optimistic UI update, then
+  `YTM_Bookmarks.saveVideoFavorite`) on click, same interaction as a
+  clip's own star. Purely a visual marker, same as a clip's favorite —
+  it doesn't reorder or filter the video list, and isn't wired into the
+  popup — which already drops the clip-level favorite toggle too, per
+  its minimal-rows convention (see "Popup vs. Library split" below).
 - **Popup vs. Library split** (separate scripts, not a shared one gated by
   a CSS class): `js/popup.js` shows only the active tab's current video
   (if it's a YouTube watch page) with minimal rows — no other videos
   listed. `js/manage.js` drives `manage.html`, the full-tab "Library" page:
   every bookmarked video listed by header only (thumbnail/title/channel/
-  clip count), click the thumbnail to expand that one video in place
+  clip count and total clip duration — see below), click the thumbnail
+  to expand that one video in place
   (full rows, manual add row, raw-text editor, copy all) — collapsed
   state tracked in an in-memory `Set` of video ids so re-renders (search,
   storage changes) don't collapse an already-open video. Opened from the
@@ -147,26 +264,86 @@ to work from.
   bookmarks. It gates the chained-playback behavior itself: on, playing
   from a clip's start jumps between bookmarks and stops after the last one;
   off, it just seeks and plays the video normally from that point, with no
-  jumping or pausing at clip boundaries. Both branches live in
-  `playFromBookmark` in `js/content.js`; `playFromPoint` wraps it to handle
-  the separate (never-chained) "play from end" case. Autoplay also gates
-  whether *loading* a bookmarked video's watch page jumps anywhere at all:
+  jumping or pausing at clip boundaries. `playFromPoint`/`playFromBookmark`
+  themselves just seek and play — the actual chaining is implemented by one
+  persistent live tracker (`handleAutoplayTimeUpdate` in `js/content.js`,
+  installed on `timeupdate` for the life of the video in `setup()`), not a
+  queue anchored at wherever playback happened to start. On every tick it
+  re-derives, from the live clip list, which clip (if any) the current
+  playhead actually falls inside (`findLiveContainingClip` — the
+  latest-starting clip whose end, if it has one, hasn't been passed yet;
+  an open-ended clip has no end so it stays "current" only until a later
+  clip's own start supersedes it) and compares that against
+  `liveTrackedTime`, its own record of where it last saw `currentTime`, to
+  tell "played forward normally into this clip's own end" apart from
+  "currentTime landed here via a jump" (any jump bigger than
+  `AUTOPLAY_SEEK_JUMP_THRESHOLD`, 2s, in either direction — YouTube's own
+  seek bar, a keyboard shortcut, scrubbing the preview, or even YouTube's
+  own internal quality/buffering corrections, none of which fire a
+  reliable `seeking` event to hook — this is deliberately derived from
+  `currentTime` deltas alone, not that event). A jump never triggers the
+  chain action; it just resyncs the tracker to whatever clip `now` is
+  actually inside (or none), which is what makes seeking anywhere — into
+  the middle of a clip, past one entirely, backward — always resume
+  correctly instead of only working "the first time" from a clean start.
+  Only a clip with an explicit end time is ever a chain point (`current.
+  endTime != null` in `findLiveContainingClip`); the tracker's own
+  chain-jump updates `liveTrackedTime` to the target *before* the next
+  tick can see it, so it's never mistaken for an outside jump. Preferences
+  and this video's clip list are cached (`cachedAutoplayPrefs`/
+  `cachedAutoplayClips`) rather than re-read from `chrome.storage.local`
+  on every tick, invalidated by the existing `chrome.storage.onChanged`
+  listener exactly when a `preferences` or `bookmarks::` write actually
+  makes them stale; an `autoplayTickBusy` guard skips a tick already in
+  flight rather than letting overlapping async reads resolve out of order.
+  Autoplay also gates whether *loading* a bookmarked video's watch page
+  jumps anywhere at all:
   `initializePlayback` only seeks to the first bookmark's start when
   Autoplay is on — off, a freshly loaded page is left at plain YouTube
   playback (wherever the page/YouTube itself resumes), untouched. An
   explicit cross-tab "play this bookmark" handoff (`YTM_Storage.
   setPendingPlay`, from the popup or the Playlist/Library page) is a
   direct user action and always honored regardless of Autoplay — that
-  check in `initializePlayback` runs before the Autoplay gate. With
-  Autoplay on, once
-  the last bookmark in the current video finishes — or the video ends
-  naturally, e.g. its last clip has no end time (`ended` listener in
-  `setup()`) — playback doesn't just stop: `advanceToNextPlaylistVideo`
-  jumps to the next video in the in-page Playlist panel's current
-  filtered/sorted order and starts it from its first bookmark (every
-  playlist entry has at least one, so this always resolves when there's a
-  next video at all). With Autoplay off, a video ending is left alone —
-  no auto-advance.
+  check in `initializePlayback` runs before the Autoplay gate.
+  When both the panel is shown (`extensionEnabled`) and Autoplay is on,
+  `setup()` holds playback paused for the whole time our own data is
+  loading (fetching bookmarks, rendering the panel/markers,
+  `initializePlayback` settling on the correct starting bookmark) rather
+  than letting YouTube start playing from wherever it remembers and then
+  visibly yanking it to the right spot a moment later — a `play` listener
+  (`holdPlaybackDuringLoad`) re-pauses any attempt to start playback
+  during that window and remembers that one was made
+  (`playRequestedDuringLoad`), then once `initializePlayback` has finished
+  seeking (and playing, if Autoplay found a bookmark to jump to) the
+  listener comes off and playback resumes on its own only if something
+  had actually tried to start it. With either the panel or Autoplay off,
+  none of this runs — playback starts immediately, exactly as before this
+  existed. A `setupGeneration` counter, bumped on every `setup()`/
+  `teardown()` call, lets an in-flight (still-awaiting) older `setup()`
+  notice it's been superseded by a newer navigation and bail out —
+  including removing its own `holdPlaybackDuringLoad` listener — instead
+  of touching a `video` element that may since belong to a different
+  video (YouTube frequently reuses the same `<video>` tag across its SPA
+  navigations). With
+  Autoplay on, once the last bookmark in the current video finishes — or
+  the video ends naturally, e.g. its last clip has no end time (`ended`
+  listener in `setup()`) — both funnel through one shared
+  `handleAutoplayEndOfQueue`, which branches on the `autoplayEndBehavior`
+  preference (also Gist-synced, defaulting to `'next'`): `'next'` jumps to
+  the next video in the in-page Playlist panel's current filtered/sorted
+  order and starts it from its first bookmark (`advanceToNextPlaylistVideo`
+  — every playlist entry has at least one bookmark, so this always
+  resolves when there's a next video at all); `'loop'` restarts *this*
+  video's own first bookmark instead, chaining through its clips again
+  indefinitely; `'pause'` just stops there — no jump, no loop. A single
+  icon-only button — ⏭ / 🔁 / ⏸, no label — cycles through the three modes
+  on click (`cycleAutoplayEndBehavior`, `AUTOPLAY_END_MODES`; the full
+  mode name only appears in its `title` tooltip), shown next to the
+  Autoplay on/off toggle in both the in-page bookmarks panel and the
+  Playlist panel (`.ytm-btn-autoplay-mode` /
+  `.ytm-btn-playlist-autoplay-mode`), disabled whenever Autoplay itself is
+  off since it has no effect then. With Autoplay off, a video ending is
+  left alone regardless of this preference — no auto-advance, no loop.
 - **In-page Playlist panel** (`js/content.js`, injected right below the
   bookmarks panel — `#ytm-playlist-panel`, `injectPlaylistPanel`/
   `renderPlaylist`): every bookmarked video, playlist-style, mirroring
@@ -216,23 +393,50 @@ to work from.
   plus a `videoId -> tagId[]` map (`YTM_Storage.getAllVideoTags`/
   `getVideoTags`) — videos reference tags by `id`, never by name, so a
   rename never has to touch every video's assignments. Library-page-only
-  UI: create/rename/delete tags and search/sort them (the "Tags" toggle —
-  sort by A–Z, Z–A, Recently Modified, Recently Added, Recently Tagged, or
-  Most Tagged, the last two derived on the fly from `videoTags` +
-  `lastModifiedByVideoId` rather than stored); the same search/sort pair
-  also sits directly above the always-visible tag filter bar (independent
-  state — one finds a tag to rename/delete, the other finds a tag to
-  filter videos by). Toggle a tag on a video from its header's "Tags" popover
-  (searchable, multi-select checkboxes, with inline "+ Create" for a new
-  tag), remove a tag directly from its chip on the video header, and
-  filter the video list by one or more tags (any-match).
-  `saveVideoTagsForVideo` bumps the same `lastModifiedByVideoId[videoId]`
-  entry as a clip write, so a video's clips and tags always merge
-  together — see Sync data model below.
+  UI: create/rename/delete tags and search/sort them (the "Tags" toggle,
+  always shown — even with zero tags in the category, so its "+ New tag"
+  chip is still reachable to create the very first one — sort by A–Z,
+  Z–A, Recently Modified, Recently Added, Recently Tagged, Most Tagged
+  (the last two derived on the fly from `videoTags` +
+  `lastModifiedByVideoId` rather than stored), or Custom order); the
+  same search/sort pair also sits directly above the always-visible tag
+  filter bar (independent state — one finds a tag to rename/delete, the
+  other finds a tag to filter videos by). Toggle a tag on a video from
+  its header's "Tags" popover (searchable, multi-select checkboxes, with
+  inline "+ Create" for a new tag), remove a tag directly from its chip
+  on the video header, and filter the video list by one or more tags
+  (any-match). `saveVideoTagsForVideo` bumps the same
+  `lastModifiedByVideoId[videoId]` entry as a clip write, so a video's
+  clips and tags always merge together — see Sync data model below.
+- **Manual reordering** for both categories and tags — a plain `order`
+  integer field on each category/tag record (`YTM_Categories.moveCategory`
+  /`YTM_Tags.moveTag` in `js/categories.js`/`js/tags.js`), not a separate
+  synced blob the way video ranks need one (`YTM_Storage.saveVideoRanks`)
+  — a category/tag record already merges as one whole per-id unit
+  (`YTM_Gist.mergeCategories`/`mergeTagData`), so `order` just rides
+  through that unchanged, no gist.js changes needed. `▲`/`▼` buttons
+  (`buildReorderButtons` in `js/manage.js`, Library page only) swap a
+  category or tag with its neighbor in the current order and renumber
+  only whichever records actually moved to dense values, deliberately
+  bumping just their sync timestamp (`touchCategory`/`touchTag`) and
+  *not* their own `updatedAt` — so reordering doesn't quietly contaminate
+  tags' "Recently Modified" sort with unrelated tags that just happened
+  to shift position. A category/tag never explicitly reordered (or
+  created before this existed) falls back to name order
+  (`ytmCompareCategoryOrder`/`ytmCompareTagOrder`); the Default category
+  is always pinned first and excluded from reordering entirely. Tags'
+  reorder buttons operate on the *custom* order regardless of the tag
+  bar's currently displayed sort mode, and clicking one switches
+  `tagSortSelect` to "Custom order" so the move is immediately visible
+  rather than silently happening behind whatever sort is currently shown.
+  Categories have no separate sort-mode selector — `YTM_Categories.getAll`
+  is the only place category order comes from, so a move there is always
+  immediately visible.
 - **Sync is automatic**, not just manual: `js/sync.js` (`YTM_Sync.run()`)
   is the one routine — fetch, merge, save locally, push — used both by
-  every manual "⟲ Sync" click and by `js/background.js`'s debounced
-  autosync, which listens for `chrome.storage.onChanged` on
+  every manual "⟲ Sync" click (via an `ytm-sync-now` message to
+  `js/background.js`) and by `js/background.js`'s debounced autosync,
+  which listens for `chrome.storage.onChanged` on
   `bookmarks`/`tags`/`videoTags`/`preferences` and runs `YTM_Sync.run()`
   ~2s after the last change. Important: `YTM_Sync.run()`'s own writes back
   to `chrome.storage.local` would otherwise re-trigger that same listener
@@ -241,14 +445,14 @@ to work from.
   sync completes) that suppresses the listener while a sync's writes are
   in flight. Don't call `YTM_Sync.run()` from a `storage.onChanged`
   handler without that guard.
-  Write-triggered autosync alone only pulls remote changes when *this*
-  device also has a local edit to push — a device sitting idle would
-  otherwise never learn about a change (e.g. a tag delete) made on
-  another device. `js/background.js` also registers a `chrome.alarms`
-  periodic alarm (`ytm-periodic-sync`, every 5 minutes) that calls the
-  same `runAutosync()`, so idle devices still pick up remote changes on
-  their own instead of waiting for their own next edit or a manual
-  "⟲ Sync" click.
+  There is deliberately no `chrome.alarms` periodic timer and no
+  cross-device credential propagation driving sync — the token/gistId
+  live in `chrome.storage.local` (entered by hand per device, see the
+  Gist sync & token handling section below), not `chrome.storage.sync`,
+  so an idle device only picks up remote changes on its own next local
+  edit or an explicit "⟲ Sync" click, never silently in the background
+  from a signed-in-account credential arriving. Don't reintroduce either
+  of those — both were tried and deliberately removed.
 
 ### Sync data model
 
@@ -261,6 +465,7 @@ Bookmarks sync as one JSON file per Gist, shaped exactly like this
   "lastModifiedByVideoId": { "<videoId>": 1735353600000 },
   "preferences": {
     "autoplay": true,
+    "autoplayEndBehavior": "next",
     "panelCollapsed": false,
     "playlistCollapsed": false,
     "playlistQuery": "",
@@ -268,12 +473,14 @@ Bookmarks sync as one JSON file per Gist, shaped exactly like this
     "playlistTagFilters": ["a1b2"],
     "updatedAt": 1735353600000
   },
-  "tags": [{ "id": "a1b2", "name": "Tutorial", "createdAt": 1735353600000, "updatedAt": 1735353600000 }],
+  "tags": [{ "id": "a1b2", "name": "Tutorial", "createdAt": 1735353600000, "updatedAt": 1735353600000, "order": 0 }],
   "tagsLastModified": { "a1b2": 1735353600000 },
   "videoTags": { "<videoId>": ["a1b2"] },
   "videoInfo": {
     "<videoId>": {
       "notes": "",
+      "alias": "",
+      "favorite": false,
       "title": "Video title",
       "channel": "Channel name",
       "channelUrl": "https://www.youtube.com/@channel",
@@ -339,9 +546,9 @@ Bookmarks sync as one JSON file per Gist, shaped exactly like this
   *unsynced* list), and `YTM_Sync.run()` strips those ids back out of
   `mergeTagData`'s result before saving/pushing, then clears the list once
   that push actually succeeds. That covers the common case: this device
-  deletes a tag, then syncs (manually, via debounced autosync, or the
-  periodic pull) — the delete reaches the Gist instead of getting silently
-  undone by that very sync. What's still unprotected is a genuinely
+  deletes a tag, then syncs (via debounced autosync or a manual "⟲ Sync"
+  click) — the delete reaches the Gist instead of getting silently undone
+  by that very sync. What's still unprotected is a genuinely
   *different* device that hasn't synced since before the delete — it still
   has its own `tagsLastModified` entry and can resurrect its stale copy on
   its own next sync, since nothing anywhere outranks it by then. Don't

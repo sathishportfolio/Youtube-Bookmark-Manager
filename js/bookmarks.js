@@ -105,6 +105,7 @@ const YTM_Bookmarks = {
     const ranks = await this.backfillVideoRanks(categoryId, all);
     const allTags = await YTM_Storage.getTags(categoryId);
     const tagsById = new Map(allTags.map((t) => [t.id, t]));
+    const allVideoInfo = await YTM_Storage.getAllVideoInfo(categoryId);
 
     const groups = [];
     for (const [videoId, clips] of Object.entries(all)) {
@@ -116,6 +117,8 @@ const YTM_Bookmarks = {
         videoId,
         categoryId,
         title: (meta && meta.title) || videoId,
+        alias: allVideoInfo[videoId]?.alias || '',
+        favorite: !!allVideoInfo[videoId]?.favorite,
         channel: (meta && meta.channel) || '',
         channelUrl: (meta && meta.channelUrl) || '',
         thumbnail: this.thumbnailUrl(videoId),
@@ -191,18 +194,34 @@ const YTM_Bookmarks = {
     return `${start}-${YTM_Youtube.formatTime(bookmark.endTime)}`;
   },
 
-  // Human-friendly clip duration for info display, e.g. "1sec", "2min",
+  // Human-friendly duration for info display, e.g. "1sec", "2min",
   // "1hr 20min" — combines the top two non-zero units (hr+min, or
   // min+sec), dropping seconds once hours are involved.
-  durationLabel(bookmark) {
-    if (bookmark.startTime == null || bookmark.endTime == null) return '';
-    const total = Math.max(0, Math.round(bookmark.endTime - bookmark.startTime));
+  formatDurationSeconds(totalSeconds) {
+    const total = Math.max(0, Math.round(totalSeconds));
     const h = Math.floor(total / 3600);
     const m = Math.floor((total % 3600) / 60);
     const s = total % 60;
     if (h > 0) return m > 0 ? `${h}hr ${m}min` : `${h}hr`;
     if (m > 0) return s > 0 ? `${m}min ${s}sec` : `${m}min`;
     return `${s}sec`;
+  },
+
+  durationLabel(bookmark) {
+    if (bookmark.startTime == null || bookmark.endTime == null) return '';
+    return this.formatDurationSeconds(bookmark.endTime - bookmark.startTime);
+  },
+
+  // Sums the duration of every clip on a video that actually has an end
+  // time (open-ended clips — no end set yet — don't contribute, since
+  // there's nothing to measure) and formats it the same way a single
+  // clip's duration is. Returns '' when no clip on the video has an end
+  // time, so callers can skip showing a total rather than showing "0sec".
+  totalDurationLabel(clips) {
+    const total = (clips || []).reduce((sum, c) => {
+      return c.endTime != null && c.startTime != null ? sum + Math.max(0, c.endTime - c.startTime) : sum;
+    }, 0);
+    return total > 0 ? this.formatDurationSeconds(total) : '';
   },
 
   parseRawLine(line) {
@@ -290,7 +309,7 @@ const YTM_Bookmarks = {
   async getVideoInfo(videoId) {
     const categoryId = (await this.resolveCategoryForVideo(videoId)) || (await YTM_Storage.getActiveCategoryId());
     const info = await YTM_Storage.getVideoInfo(categoryId, videoId);
-    return { notes: '', title: '', channel: '', channelUrl: '', thumbnailUrl: this.thumbnailUrl(videoId), ...info };
+    return { notes: '', alias: '', favorite: false, title: '', channel: '', channelUrl: '', thumbnailUrl: this.thumbnailUrl(videoId), ...info };
   },
 
   async saveNotes(videoId, notes) {
@@ -298,6 +317,41 @@ const YTM_Bookmarks = {
     const meta = (await YTM_Storage.getVideoMeta(videoId)) || {};
     await YTM_Storage.saveVideoInfoForVideo(categoryId, videoId, {
       notes: notes || '',
+      title: meta.title || '',
+      channel: meta.channel || '',
+      channelUrl: meta.channelUrl || '',
+      thumbnailUrl: this.thumbnailUrl(videoId)
+    });
+  },
+
+  // A user-chosen display title for the video. Never stored equal to the
+  // real YouTube title (trimmed, exact match) — that keeps "no alias set"
+  // and "alias same as the YouTube title" the same state, so callers only
+  // ever need to check "is alias non-empty" to decide whether to show it.
+  async saveAlias(videoId, alias) {
+    const categoryId = (await this.resolveCategoryForVideo(videoId)) || (await YTM_Storage.getActiveCategoryId());
+    const meta = (await YTM_Storage.getVideoMeta(videoId)) || {};
+    const trimmed = (alias || '').trim();
+    const effectiveAlias = trimmed && trimmed !== (meta.title || '').trim() ? trimmed : '';
+    await YTM_Storage.saveVideoInfoForVideo(categoryId, videoId, {
+      alias: effectiveAlias,
+      title: meta.title || '',
+      channel: meta.channel || '',
+      channelUrl: meta.channelUrl || '',
+      thumbnailUrl: this.thumbnailUrl(videoId)
+    });
+  },
+
+  // Whole-video favorite — a separate flag from a clip's own `favorite`
+  // (YTM_Storage.saveBookmarksForVideo), which marks one clip within a
+  // video. This marks the video itself, e.g. to flag it among many in the
+  // Library page or Playlist panel. Purely a visual marker, same as a
+  // clip's favorite star — it doesn't reorder or filter anything.
+  async saveVideoFavorite(videoId, favorite) {
+    const categoryId = (await this.resolveCategoryForVideo(videoId)) || (await YTM_Storage.getActiveCategoryId());
+    const meta = (await YTM_Storage.getVideoMeta(videoId)) || {};
+    await YTM_Storage.saveVideoInfoForVideo(categoryId, videoId, {
+      favorite: !!favorite,
       title: meta.title || '',
       channel: meta.channel || '',
       channelUrl: meta.channelUrl || '',
@@ -401,13 +455,14 @@ const YTM_Bookmarks = {
   },
 
   // Nudges the most recently created clip's start time by deltaSeconds
-  // (negative to move it earlier) — used by the Shift+, keyboard shortcut.
-  // Unlike setRecentClipStart, the new value is relative to the clip's
-  // existing start rather than snapping to currentTime; falls back to
-  // currentTime as the base when the clip somehow has no start yet.
-  // Creates a brand-new clip at currentTime when the video has none at
-  // all, same as setRecentClipStart. Never lets the start go below 0 or
-  // past the clip's own end. Returns `{ clip, created }`.
+  // (negative to move it earlier, positive later) — used by the
+  // Shift+,/Shift+. keyboard shortcuts. Unlike setRecentClipStart, the
+  // new value is relative to the clip's existing start rather than
+  // snapping to currentTime; falls back to currentTime as the base when
+  // the clip somehow has no start yet. Creates a brand-new clip at
+  // currentTime when the video has none at all, same as
+  // setRecentClipStart. Never lets the start go below 0 or past the
+  // clip's own end. Returns `{ clip, created }`.
   async shiftRecentClipStart(videoMeta, currentTime, deltaSeconds) {
     await this.rememberVideoMeta(videoMeta.videoId, videoMeta.title, videoMeta.channel, videoMeta.channelUrl);
     const categoryId = (await this.resolveCategoryForVideo(videoMeta.videoId)) || (await YTM_Storage.getActiveCategoryId());
@@ -430,12 +485,13 @@ const YTM_Bookmarks = {
   },
 
   // Nudges the most recently created clip's end time by deltaSeconds
-  // (positive to move it later) — used by the Shift+. keyboard shortcut.
-  // Unlike setRecentClipEnd, this never assigns a first end time to a
-  // clip that doesn't have one yet — there's nothing to nudge — so it
-  // no-ops (returns null) for a video with no clips, or whose most recent
-  // clip has no end yet. `maxTime`, when finite, caps the result (e.g. the
-  // video's own duration).
+  // (negative to move it earlier, positive later) — used by the
+  // Ctrl+Shift+,/Ctrl+Shift+. keyboard shortcuts. Unlike setRecentClipEnd,
+  // this never assigns a first end time to a clip that doesn't have one
+  // yet — there's nothing to nudge — so it no-ops (returns null) for a
+  // video with no clips, or whose most recent clip has no end yet.
+  // `maxTime`, when finite, caps the result (e.g. the video's own
+  // duration), and it's never let go below the clip's own start.
   async shiftRecentClipEnd(videoId, deltaSeconds, maxTime) {
     const categoryId = await this.resolveCategoryForVideo(videoId);
     if (!categoryId) return null;
@@ -502,6 +558,24 @@ const YTM_Bookmarks = {
       }
       clip.startTime = start;
       clip.endTime = end;
+    });
+  },
+
+  // Retimes one point (start or end) of an existing clip directly, used by
+  // the seek-bar marker flags' Ctrl+drag reposition — as opposed to
+  // saveEdits, which replaces both times at once from typed text. Keeps
+  // the pair consistent the same way markEnd/setRecentClipEnd already do:
+  // dragging a start past its own end (or an end past its own start)
+  // pulls the other one along rather than letting them invert.
+  async setPointTime(id, point, time) {
+    return this._withClip(id, (clip) => {
+      if (point === 'start') {
+        clip.startTime = time;
+        if (clip.endTime != null && clip.endTime < time) clip.endTime = time;
+      } else {
+        clip.endTime = time;
+        if (clip.startTime != null && clip.startTime > time) clip.startTime = time;
+      }
     });
   },
 

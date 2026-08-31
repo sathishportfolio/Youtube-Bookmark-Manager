@@ -33,14 +33,11 @@ function renderVideoHeader(meta) {
 
   const info = document.createElement('div');
   info.className = 'video-meta';
-  const title = document.createElement('a');
-  title.href = meta.url;
-  title.target = '_blank';
-  title.textContent = meta.title;
+  const titleDisplay = YTM_Row.buildTitleDisplay(meta);
   const channel = document.createElement('div');
   channel.className = 'video-channel';
   channel.textContent = meta.channel;
-  info.append(title, channel);
+  info.append(titleDisplay, channel);
 
   header.append(img, info);
 }
@@ -99,11 +96,13 @@ async function loadCurrentVideo() {
   clipsCache = await YTM_Bookmarks.getClipsForVideo(currentVideoId);
   const cachedMeta = await YTM_Storage.getVideoMeta(currentVideoId);
   const fallbackTitle = (currentTab.title || '').replace(/ - YouTube$/, '');
+  const info = await YTM_Bookmarks.getVideoInfo(currentVideoId);
 
   renderVideoHeader({
     thumbnail: YTM_Bookmarks.thumbnailUrl(currentVideoId),
     url: YTM_Bookmarks.videoUrl(currentVideoId),
     title: cachedMeta?.title || fallbackTitle || currentVideoId,
+    alias: info.alias,
     channel: cachedMeta?.channel || ''
   });
 
@@ -115,9 +114,9 @@ async function refreshAutoplayButton() {
   document.getElementById('autoplayBtn').textContent = `AutoPlay Bookmark: ${prefs.autoplay === false ? 'Off' : 'On'}`;
 }
 
-// Green: configured and the last sync attempt (manual, autosync, or the
-// periodic background pull) succeeded. Red: not configured yet, or the
-// last attempt failed — see settings.lastSyncError, set by YTM_Sync.run().
+// Green: configured and the last manual sync succeeded. Red: not
+// configured yet, or the last attempt failed — see settings.lastSyncError,
+// set by YTM_Sync.run().
 async function refreshSyncStatus() {
   const settings = await YTM_Storage.getSettings();
   const dot = document.getElementById('syncDot');
@@ -175,18 +174,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   chrome.storage.onChanged.addListener((changes, area) => {
-    // The token/gistId credentials live in chrome.storage.sync (tied to
-    // the signed-in account, not this device — see
-    // YTM_Storage.getCredentials), so they can change without any local
-    // write at all, e.g. arriving from another device.
-    if (area === 'sync' && changes.credentials) refreshSyncStatus();
     if (area !== 'local') return;
     // Bookmarks are stored per category, as `bookmarks::<categoryId>`
     // keys (see js/storage.js) — the current video could be in any of
     // them, so react to a change under any category rather than tracking
     // which one it's in here too.
-    if (Object.keys(changes).some((k) => k.startsWith('bookmarks::'))) loadCurrentVideo();
+    if (Object.keys(changes).some((k) => k.startsWith('bookmarks::') || k.startsWith('videoInfo::'))) loadCurrentVideo();
     if (changes.preferences) refreshExtensionEnabledCheckbox();
-    if (changes.settings) refreshSyncStatus();
+    if (changes.settings || changes.credentials) refreshSyncStatus();
   });
 });

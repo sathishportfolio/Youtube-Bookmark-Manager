@@ -17,7 +17,9 @@
     'Ctrl + ,  — update the newest clip’s start (adds one if none yet)',
     'Ctrl + .  — update the newest clip’s end',
     'Shift + ,  — shift the newest clip’s start back 1s',
-    'Shift + .  — shift the newest clip’s end forward 1s',
+    'Shift + .  — shift the newest clip’s start forward 1s',
+    'Ctrl + Shift + ,  — shift the newest clip’s end back 1s',
+    'Ctrl + Shift + .  — shift the newest clip’s end forward 1s',
     '[  — jump to the last clip’s start',
     ']  — jump to the last clip’s end',
     'Ctrl + Z  — undo last bookmark change',
@@ -37,13 +39,21 @@
   let currentVideoId = null;
   let video = null;
   let observer = null;
+  // Bumped on every setup() call so an in-flight (still-awaiting) older
+  // call can tell it's been superseded by a newer navigation and bail out
+  // instead of touching a `video` element that may since have moved on to
+  // a different video — see the play-hold logic in setup() below.
+  let setupGeneration = 0;
   let markerRenderScheduled = false;
   let presenceCheckScheduled = false;
   let rawEditorOpen = false;
-  let playQueue = null;
-  let playQueueHandler = null;
   let videoEndedHandler = null;
+  let videoTimeUpdateHandler = null;
   let toastHideTimer = null;
+
+  // Ctrl+drag state for a seek-bar marker flag being repositioned (see
+  // beginMarkerDrag below) — null whenever no drag is in progress.
+  let activeMarkerDrag = null;
 
   // Undo/redo history for bookmark edits made through this in-page panel
   // (start/end marks, shifts, favorite/save/delete, manual add, raw
@@ -170,52 +180,128 @@
   // video normally from there — no jumping between bookmarks, no pausing
   // at any clip's end.
 
-  function clearPlayQueue() {
-    if (playQueueHandler) {
-      video.removeEventListener('timeupdate', playQueueHandler);
-      playQueueHandler = null;
+  // A single persistent live tracker (installed once in setup(), driven by
+  // 'timeupdate') is what implements chaining — not a one-shot queue set
+  // up wherever playback happened to start. That's deliberate: a queue
+  // anchored at "the bookmark that was clicked" stops meaning anything the
+  // moment the user seeks anywhere else (YouTube's own seek bar, a
+  // keyboard shortcut, scrubbing) — a completely normal thing to do, not
+  // a departure from Autoplay — so re-deriving "which clip is `now`
+  // actually inside" fresh from the live clip list on every tick is what
+  // keeps chaining working no matter how playback got to where it is.
+  //
+  // liveTrackedClip/liveTrackedTime hold this tracker's own idea of
+  // "which clip we're in" and "where we last observed currentTime" —
+  // liveTrackedTime is compared against the real currentTime each tick
+  // purely to tell "played forward normally into this clip's own end"
+  // apart from "currentTime landed somewhere via a jump" (a seek, or
+  // this tracker's own chain-jump, which pre-sets liveTrackedTime to the
+  // target so it's never mistaken for an outside jump). A jump — either
+  // direction — never triggers the boundary action; it just resyncs
+  // liveTrackedClip to whatever clip (if any) `now` actually falls inside,
+  // which is also exactly what makes seeking into the middle of a clip
+  // and playing on from there correctly pick tracking back up.
+  let liveTrackedClip = null;
+  let liveTrackedTime = null;
+  let autoplayTickBusy = false;
+  const AUTOPLAY_SEEK_JUMP_THRESHOLD = 2;
+
+  function resetLiveAutoplayTracking() {
+    liveTrackedClip = null;
+    liveTrackedTime = null;
+  }
+
+  // 'timeupdate' fires several times a second — re-fetching preferences
+  // and this video's clips from chrome.storage.local on every single tick
+  // would be wasteful and, worse, racy (overlapping async reads resolving
+  // out of order could stomp on each other's idea of liveTrackedClip).
+  // Cached here instead, invalidated by the existing chrome.storage.onChanged
+  // listener below exactly when they'd actually be stale (a `preferences`
+  // or `bookmarks::` write) and reset alongside the tracker itself.
+  let cachedAutoplayPrefs = null;
+  let cachedAutoplayClips = null;
+
+  function invalidateAutoplayPrefsCache() {
+    cachedAutoplayPrefs = null;
+  }
+
+  function invalidateAutoplayClipsCache() {
+    cachedAutoplayClips = null;
+  }
+
+  async function getAutoplayPrefs() {
+    if (!cachedAutoplayPrefs) cachedAutoplayPrefs = await YTM_Storage.getPreferences();
+    return cachedAutoplayPrefs;
+  }
+
+  async function getAutoplayClips() {
+    if (!cachedAutoplayClips) cachedAutoplayClips = YTM_Bookmarks.sortByStart(await getBookmarksForCurrentVideo());
+    return cachedAutoplayClips;
+  }
+
+  // The clip `now` is currently "inside": started, and not yet past its
+  // own end (an open-ended clip has no end, so once started it stays
+  // "inside" until a later clip's own start supersedes it — see the
+  // comment above). Picks the *latest*-starting match rather than the
+  // first chronologically, so a later clip's start correctly takes over
+  // from an earlier open-ended one once playback reaches it.
+  function findLiveContainingClip(clips, now) {
+    let best = null;
+    for (const c of clips) {
+      if (c.startTime == null || c.startTime > now) continue;
+      const end = c.endTime != null ? c.endTime : Infinity;
+      if (now < end && (!best || c.startTime > best.startTime)) best = c;
     }
-    playQueue = null;
+    return best;
+  }
+
+  async function handleAutoplayTimeUpdate() {
+    if (!video || autoplayTickBusy) return;
+    autoplayTickBusy = true;
+    try {
+      const prefs = await getAutoplayPrefs();
+      if (prefs.autoplay === false) {
+        resetLiveAutoplayTracking();
+        return;
+      }
+
+      const now = video.currentTime;
+      const isJump = liveTrackedTime == null || Math.abs(now - liveTrackedTime) > AUTOPLAY_SEEK_JUMP_THRESHOLD;
+
+      if (!isJump && liveTrackedClip && liveTrackedClip.endTime != null && liveTrackedTime < liveTrackedClip.endTime && now >= liveTrackedClip.endTime) {
+        // Played forward normally right up to this clip's own end — chain
+        // to whichever clip starts next in the video (regardless of where
+        // playback originally began), or hand off to
+        // handleAutoplayEndOfQueue if this was the last one.
+        const clips = await getAutoplayClips();
+        const idx = clips.findIndex((c) => c.id === liveTrackedClip.id);
+        const next = idx >= 0 ? clips[idx + 1] : null;
+        if (next) {
+          liveTrackedClip = next;
+          liveTrackedTime = next.startTime;
+          video.currentTime = next.startTime;
+        } else {
+          liveTrackedClip = null;
+          liveTrackedTime = now;
+          await handleAutoplayEndOfQueue();
+        }
+        return;
+      }
+
+      const clips = await getAutoplayClips();
+      liveTrackedClip = findLiveContainingClip(clips, now);
+      liveTrackedTime = now;
+    } finally {
+      autoplayTickBusy = false;
+    }
   }
 
   async function playFromBookmark(bookmark) {
     if (!video) return;
-    clearPlayQueue();
-
-    const prefs = await YTM_Storage.getPreferences();
-    if (prefs.autoplay === false) {
-      video.currentTime = bookmark.startTime;
-      video.play().catch(() => {});
-      return;
-    }
-
-    const clips = await getBookmarksForCurrentVideo();
-    const chronological = YTM_Bookmarks.sortByStart(clips);
-    const startIndex = chronological.findIndex((b) => b.id === bookmark.id);
-    const list = startIndex >= 0 ? chronological.slice(startIndex) : [bookmark];
-
-    video.currentTime = list[0].startTime;
+    video.currentTime = bookmark.startTime;
     video.play().catch(() => {});
-
-    if (list.length < 2 && list[0].endTime == null) return;
-
-    let idx = 0;
-    playQueue = list;
-    playQueueHandler = () => {
-      const current = playQueue[idx];
-      if (current.endTime != null && video.currentTime >= current.endTime) {
-        const next = playQueue[idx + 1];
-        if (next) {
-          idx += 1;
-          video.currentTime = next.startTime;
-        } else {
-          video.pause();
-          clearPlayQueue();
-          advanceToNextPlaylistVideo();
-        }
-      }
-    };
-    video.addEventListener('timeupdate', playQueueHandler);
+    // Autoplay off: no chaining — the shared live tracker above already
+    // no-ops whenever it is off, so nothing further to do here either way.
   }
 
   // Plays from a specific point on a bookmark: 'start' chains into later
@@ -224,7 +310,6 @@
   async function playFromPoint(bookmark, point) {
     if (!video) return;
     if (point === 'end' && bookmark.endTime != null) {
-      clearPlayQueue();
       video.currentTime = bookmark.endTime;
       video.play().catch(() => {});
       return;
@@ -288,7 +373,7 @@
     if (playlistTagFilters.size > 0 && !group.tags.some((t) => playlistTagFilters.has(t.id))) return false;
     if (!query) return true;
     const q = query.toLowerCase();
-    const haystack = [group.title, group.channel, ...group.clips.map((c) => c.label)].join(' ').toLowerCase();
+    const haystack = [group.title, group.alias, group.channel, ...group.clips.map((c) => c.label)].join(' ').toLowerCase();
     return haystack.includes(q);
   }
 
@@ -355,11 +440,9 @@
   // playlist's current filtered/sorted order and start it from its first
   // bookmark. Every video in the playlist has at least one bookmark (only
   // bookmarked videos are listed), so "start from bookmark if exist" always
-  // resolves as long as there's a next video at all.
+  // resolves as long as there's a next video at all. Only called by
+  // handleAutoplayEndOfQueue below when autoplayEndBehavior is 'next'.
   async function advanceToNextPlaylistVideo() {
-    const prefs = await YTM_Storage.getPreferences();
-    if (prefs.autoplay === false) return;
-
     await ensurePlaylistPrefsLoaded();
     const groups = await getPlaylistGroups();
     const idx = groups.findIndex((g) => g.videoId === currentVideoId);
@@ -371,6 +454,39 @@
 
     await YTM_Storage.setPendingPlay({ videoId: next.videoId, bookmarkId: chronological[0].id, point: 'start' });
     location.href = next.url;
+  }
+
+  // The single point both "the live tracker reached the last clip's own
+  // end" (handleAutoplayTimeUpdate) and "the video itself ended naturally"
+  // (the 'ended' listener in setup(), e.g. the last clip had no end time)
+  // funnel through — what happens next is controlled by the
+  // autoplayEndBehavior preference (see the ⏭/🔁/⏸ button built by
+  // applyAutoplayEndBehaviorButtonState): 'next' (default) jumps to the
+  // next playlist video's first bookmark, 'loop' restarts this video's own
+  // first bookmark, 'pause' just stops here. A no-op with Autoplay itself
+  // off, same as before this preference existed.
+  async function handleAutoplayEndOfQueue() {
+    const prefs = await YTM_Storage.getPreferences();
+    if (prefs.autoplay === false) return;
+    resetLiveAutoplayTracking();
+
+    const mode = prefs.autoplayEndBehavior || 'next';
+    if (mode === 'pause') {
+      video.pause();
+      return;
+    }
+    if (mode === 'loop') {
+      const clips = await getBookmarksForCurrentVideo();
+      const chronological = YTM_Bookmarks.sortByStart(clips);
+      if (chronological.length === 0) {
+        video.pause();
+        return;
+      }
+      await playFromBookmark(chronological[0]);
+      return;
+    }
+    video.pause();
+    await advanceToNextPlaylistVideo();
   }
 
   // On page load: a cross-tab "play this bookmark" request (from the popup)
@@ -589,28 +705,32 @@
     showToast(created ? 'Added a new bookmark.' : "Updated the last bookmark's start time.");
   }
 
-  // Shift+, / Shift+. (checked via e.code, since Shift remaps ',' to '<'
-  // and '.' to '>' in e.key on most layouts) nudge the most recently
-  // created clip's start/end by 1 second instead of snapping to the
-  // current playback position: Shift+, moves the start 1 second earlier
-  // (creating a brand-new clip at the current time if the video has none
-  // yet, same as Ctrl+,); Shift+. moves the end 1 second later, but only
-  // when that clip already has an end — see shiftRecentClipEnd.
-  async function handleShiftMarkStart() {
+  // Shift+,/Shift+. and Ctrl+Shift+,/Ctrl+Shift+. (checked via e.code,
+  // since Shift remaps ',' to '<' and '.' to '>' in e.key on most
+  // layouts) nudge the most recently created clip's start or end by 1
+  // second instead of snapping to the current playback position:
+  // Shift+, moves the start 1 second earlier (creating a brand-new clip
+  // at the current time if the video has none yet, same as Ctrl+,);
+  // Shift+. moves that same start 1 second later. Ctrl+Shift+,/
+  // Ctrl+Shift+. do the equivalent for the end time instead — back/
+  // forward 1 second — but only when that clip already has an end (see
+  // shiftRecentClipEnd); there's nothing to nudge otherwise.
+  async function handleShiftMarkStart(deltaSeconds) {
     if (!video || !currentVideoId) return;
     const snapshot = await captureUndoSnapshot();
-    const { created } = await YTM_Bookmarks.shiftRecentClipStart(readMetadata(), video.currentTime, -1);
+    const { created } = await YTM_Bookmarks.shiftRecentClipStart(readMetadata(), video.currentTime, deltaSeconds);
     pushUndoSnapshot(snapshot);
     await refreshPanel();
     scheduleMarkerRender();
-    showToast(created ? 'Added a new bookmark.' : "Shifted the last bookmark's start time back by 1 second.");
+    const direction = deltaSeconds < 0 ? 'back' : 'forward';
+    showToast(created ? 'Added a new bookmark.' : `Shifted the last bookmark's start time ${direction} by 1 second.`);
   }
 
-  async function handleShiftMarkEnd() {
+  async function handleShiftMarkEnd(deltaSeconds) {
     if (!video || !currentVideoId) return;
     const snapshot = await captureUndoSnapshot();
     const maxTime = Number.isFinite(video.duration) ? video.duration : undefined;
-    const updated = await YTM_Bookmarks.shiftRecentClipEnd(currentVideoId, 1, maxTime);
+    const updated = await YTM_Bookmarks.shiftRecentClipEnd(currentVideoId, deltaSeconds, maxTime);
     if (!updated) return;
     pushUndoSnapshot(snapshot);
     await refreshPanel();
@@ -644,6 +764,24 @@
     if (e.repeat || e.altKey || e.metaKey || e.isComposing) return;
     if (isTypingTarget(document.activeElement)) return;
     if (!video || !currentVideoId) return;
+    // Checked before the plain-Ctrl branch below, since Ctrl+Shift+,/.
+    // are their own bindings (end back/forward 1s) — not a
+    // Shift-modified version of plain Ctrl+,/. (set start/end to the
+    // current playback position).
+    if (e.ctrlKey && e.shiftKey) {
+      // e.code (physical key), since Shift remaps ',' to '<' and '.' to
+      // '>' in e.key on most layouts.
+      if (e.code === 'Comma') {
+        e.preventDefault();
+        e.stopPropagation();
+        await handleShiftMarkEnd(-1);
+      } else if (e.code === 'Period') {
+        e.preventDefault();
+        e.stopPropagation();
+        await handleShiftMarkEnd(1);
+      }
+      return;
+    }
     if (e.ctrlKey) {
       const key = e.key.toLowerCase();
       if (key === ',') {
@@ -671,11 +809,11 @@
       if (e.code === 'Comma') {
         e.preventDefault();
         e.stopPropagation();
-        await handleShiftMarkStart();
+        await handleShiftMarkStart(-1);
       } else if (e.code === 'Period') {
         e.preventDefault();
         e.stopPropagation();
-        await handleShiftMarkEnd();
+        await handleShiftMarkStart(1);
       }
       return;
     }
@@ -782,7 +920,10 @@
     panel.id = PANEL_ID;
     panel.innerHTML = `
       <div class="ytm-panel-toggle-row">
-        <button type="button" class="ytm-icon-btn-lg ytm-btn-toggle-panel" title="Bookmarks">🔖 Bookmarks ▾</button>
+        <div class="ytm-panel-toggle-left">
+          <button type="button" class="ytm-icon-btn-lg ytm-btn-toggle-panel" title="Bookmarks">🔖 Bookmarks ▾</button>
+          <span class="ytm-panel-total-duration"></span>
+        </div>
         <div class="ytm-panel-toggle-actions">
           <button type="button" class="ytm-icon-btn-lg ytm-btn-library" title="Open Library">📚</button>
         </div>
@@ -801,6 +942,7 @@
           <div class="ytm-panel-toolbar">
             <span class="ytm-notes-slot"></span>
             <button type="button" class="ytm-icon-btn-lg ytm-btn-autoplay" title="AutoPlay Bookmark: On — Play jumps between bookmarks and stops after the last one.">▶ On</button>
+            <button type="button" class="ytm-icon-btn-lg ytm-btn-autoplay-mode"></button>
             <button type="button" class="ytm-icon-btn-lg ytm-btn-raw" title="Raw text editor">📝</button>
             <button type="button" class="ytm-icon-btn-lg ytm-btn-copy" title="Copy this video's bookmarks as text">📋</button>
             <button type="button" class="ytm-icon-btn-lg ytm-btn-shortcuts" title="${SHORTCUTS_HELP_TEXT}">⌨️</button>
@@ -824,6 +966,7 @@
     panel.querySelector('.ytm-btn-start').addEventListener('click', handleStart);
     panel.querySelector('.ytm-btn-end').addEventListener('click', handleEnd);
     panel.querySelector('.ytm-btn-autoplay').addEventListener('click', toggleAutoplay);
+    panel.querySelector('.ytm-btn-autoplay-mode').addEventListener('click', cycleAutoplayEndBehavior);
     panel.querySelector('.ytm-btn-raw').addEventListener('click', toggleRawEditor);
     panel.querySelector('.ytm-btn-copy').addEventListener('click', copyAllBookmarks);
     panel.querySelector('.ytm-btn-library').addEventListener('click', () => {
@@ -902,13 +1045,46 @@
       : 'AutoPlay Bookmark: Off — Play just plays the video normally from that point.';
   }
 
+  // What Autoplay does once this video's bookmarks are done — a single
+  // button that cycles through the three modes on click (order matches
+  // AUTOPLAY_END_MODES below), its icon/label changing to show whichever
+  // mode is currently active. Persisted as the autoplayEndBehavior
+  // preference (YTM_Storage.getPreferences), so it's Gist-synced like
+  // Autoplay itself and every other preference.
+  const AUTOPLAY_END_MODES = ['next', 'loop', 'pause'];
+  const AUTOPLAY_END_META = {
+    next: { icon: '⏭', label: 'Next video', title: 'next video\'s first bookmark' },
+    loop: { icon: '🔁', label: 'Loop', title: 'this video\'s own first bookmark' },
+    pause: { icon: '⏸', label: 'Pause', title: 'just pause — no jump, no loop' }
+  };
+
+  async function cycleAutoplayEndBehavior() {
+    const prefs = await YTM_Storage.getPreferences();
+    const current = AUTOPLAY_END_MODES.includes(prefs.autoplayEndBehavior) ? prefs.autoplayEndBehavior : 'next';
+    const next = AUTOPLAY_END_MODES[(AUTOPLAY_END_MODES.indexOf(current) + 1) % AUTOPLAY_END_MODES.length];
+    await YTM_Storage.savePreferences({ ...prefs, autoplayEndBehavior: next, updatedAt: Date.now() });
+    await refreshPreferencesUI();
+  }
+
+  const AUTOPLAY_END_CYCLE_ORDER = AUTOPLAY_END_MODES.map((m) => AUTOPLAY_END_META[m].label).join(' → ');
+
+  function applyAutoplayEndBehaviorButtonState(btn, mode, autoplayOn) {
+    if (!btn) return;
+    const meta = AUTOPLAY_END_META[mode] || AUTOPLAY_END_META.next;
+    btn.textContent = meta.icon;
+    btn.title = `When bookmarks end: ${meta.title} (click to cycle: ${AUTOPLAY_END_CYCLE_ORDER}).`;
+    btn.disabled = !autoplayOn;
+  }
+
   async function refreshPreferencesUI() {
     const panel = document.getElementById(PANEL_ID);
     if (!panel) return;
     const prefs = await YTM_Storage.getPreferences();
     const autoplayOn = prefs.autoplay !== false;
+    const autoplayEndMode = AUTOPLAY_END_MODES.includes(prefs.autoplayEndBehavior) ? prefs.autoplayEndBehavior : 'next';
 
     applyAutoplayButtonState(panel.querySelector('.ytm-btn-autoplay'), autoplayOn);
+    applyAutoplayEndBehaviorButtonState(panel.querySelector('.ytm-btn-autoplay-mode'), autoplayEndMode, autoplayOn);
 
     const body = panel.querySelector('.ytm-panel-body');
     const toggleBtn = panel.querySelector('.ytm-btn-toggle-panel');
@@ -924,6 +1100,7 @@
       if (playlistBody) playlistBody.hidden = playlistCollapsed;
       if (playlistToggleBtn) playlistToggleBtn.textContent = playlistCollapsed ? '▤ Playlist ▸' : '▤ Playlist ▾';
       applyAutoplayButtonState(playlistPanel.querySelector('.ytm-btn-playlist-autoplay'), autoplayOn);
+      applyAutoplayEndBehaviorButtonState(playlistPanel.querySelector('.ytm-btn-playlist-autoplay-mode'), autoplayEndMode, autoplayOn);
     }
   }
 
@@ -989,6 +1166,9 @@
     const clips = await getBookmarksForCurrentVideo();
     const pending = await YTM_Bookmarks.findPendingClip(currentVideoId);
 
+    const totalDuration = YTM_Bookmarks.totalDurationLabel(clips);
+    panel.querySelector('.ytm-panel-total-duration').textContent = totalDuration ? `${totalDuration} total` : '';
+
     const endBtn = panel.querySelector('.ytm-btn-end');
     const hint = panel.querySelector('.ytm-hint');
     endBtn.disabled = !pending;
@@ -1023,6 +1203,7 @@
         <span class="ytm-playlist-label"></span>
         <div class="ytm-panel-toggle-actions">
           <button type="button" class="ytm-icon-btn-lg ytm-btn-playlist-autoplay" title="AutoPlay Bookmark: On — playback stays within bookmarks and auto-advances to the next video when one finishes.">▶ On</button>
+          <button type="button" class="ytm-icon-btn-lg ytm-btn-playlist-autoplay-mode"></button>
         </div>
       </div>
       <div class="ytm-playlist-body">
@@ -1048,6 +1229,7 @@
               <option value="added">Recently Added</option>
               <option value="tagged">Recently Tagged</option>
               <option value="mostTagged">Most Tagged</option>
+              <option value="custom">Custom order</option>
             </select>
           </div>
           <div class="ytm-playlist-tag-bar tag-chip-list"></div>
@@ -1068,6 +1250,7 @@
 
     panel.querySelector('.ytm-btn-toggle-playlist').addEventListener('click', togglePlaylistCollapsed);
     panel.querySelector('.ytm-btn-playlist-autoplay').addEventListener('click', toggleAutoplay);
+    panel.querySelector('.ytm-btn-playlist-autoplay-mode').addEventListener('click', cycleAutoplayEndBehavior);
     panel.querySelector('.ytm-playlist-search').addEventListener('input', (e) => {
       playlistQuery = e.target.value;
       renderPlaylist();
@@ -1242,17 +1425,40 @@
       startPlaylistRankEdit(rankBadge, group);
     });
 
+    // Alias (if set) becomes the bold clickable heading, with the real
+    // YouTube title shown smaller/muted underneath — both jump to the
+    // same place (the video's first bookmark), matching a plain title's
+    // click behavior. With no alias this is just the plain title link,
+    // same as before aliases existed.
+    const titleBlock = document.createElement('div');
+    titleBlock.className = 'ytm-playlist-title-block';
     const title = document.createElement('a');
     title.href = group.url;
-    title.className = 'ytm-playlist-title';
     title.textContent = group.title;
     title.addEventListener('click', (e) => {
       e.preventDefault();
       playFirstBookmarkOfVideo(group);
     });
+    if (group.alias && group.alias.trim()) {
+      title.className = 'ytm-playlist-original-title';
+      const aliasLink = document.createElement('a');
+      aliasLink.href = group.url;
+      aliasLink.className = 'ytm-playlist-title ytm-playlist-alias-title';
+      aliasLink.textContent = group.alias;
+      aliasLink.addEventListener('click', (e) => {
+        e.preventDefault();
+        playFirstBookmarkOfVideo(group);
+      });
+      titleBlock.append(aliasLink, title);
+    } else {
+      title.className = 'ytm-playlist-title';
+      titleBlock.append(title);
+    }
 
     const sub = document.createElement('div');
     sub.className = 'ytm-playlist-sub';
+    const totalDuration = YTM_Bookmarks.totalDurationLabel(group.clips);
+    const countText = `${group.clips.length} bookmark${group.clips.length === 1 ? '' : 's'}${totalDuration ? ` · ${totalDuration} total` : ''}`;
     // Clickable straight to the channel's Playlists tab when we know its
     // URL (captured alongside title on the video's own watch page — see
     // readChannelUrl above); older bookmarks made before that existed
@@ -1265,16 +1471,21 @@
       channelLink.rel = 'noopener';
       channelLink.textContent = group.channel;
       channelLink.addEventListener('click', (e) => e.stopPropagation());
-      sub.append(channelLink, document.createTextNode(` · ${group.clips.length} bookmark${group.clips.length === 1 ? '' : 's'}`));
+      sub.append(channelLink, document.createTextNode(` · ${countText}`));
     } else {
-      sub.textContent = `${group.channel} · ${group.clips.length} bookmark${group.clips.length === 1 ? '' : 's'}`;
+      sub.textContent = `${group.channel} · ${countText}`;
     }
 
     const rankRow = document.createElement('div');
     rankRow.className = 'ytm-playlist-rank-row';
-    rankRow.append(rankBadge, YTM_Row.buildNotesControl(group.videoId));
+    rankRow.append(
+      rankBadge,
+      YTM_Row.buildVideoFavoriteToggle(group.videoId, group.favorite),
+      YTM_Row.buildAliasControl(group.videoId),
+      YTM_Row.buildNotesControl(group.videoId)
+    );
 
-    meta.append(rankRow, title, sub);
+    meta.append(rankRow, titleBlock, sub);
 
     if (group.tags.length > 0) {
       const tagsRow = document.createElement('div');
@@ -1369,6 +1580,29 @@
   }
 
   // --- seek bar markers ---------------------------------------------------
+  //
+  // Every clip gets a yellow start-time pointer — a flag sticking up above
+  // the bar, wider/taller than a thin range strip could ever be — as the
+  // one hoverable/clickable target, whether or not the clip has an end
+  // time (previously only an end-less "pending" clip got a dedicated
+  // point marker; a ranged clip's only hoverable surface was its own
+  // (often sub-pixel-thin, for a short clip on a long video) range strip,
+  // which made it hard to hit and — worse — still let hover bubble up to
+  // YouTube's own progress-bar-container listener, which shows YouTube's
+  // native scrub-preview thumbnail regardless of our overlay's z-index,
+  // since bubbling doesn't care what a descendant painted on top). A
+  // clip's range (if it has an end) is still drawn as a thin underlay for
+  // visual reference, but it's pointer-events: none — purely decorative —
+  // so YouTube's own hover/preview behavior is untouched everywhere on the
+  // bar except exactly at a pointer flag. STOP_PROPAGATION_EVENTS is
+  // stopped right at the pointer element specifically so hovering it never
+  // reaches that container listener, which is what actually keeps
+  // YouTube's preview from fighting with our tooltip.
+  const STOP_PROPAGATION_EVENTS = [
+    'mouseover', 'mousemove', 'mouseout', 'mouseenter', 'mouseleave',
+    'mousedown', 'mouseup',
+    'pointerover', 'pointermove', 'pointerout', 'pointerdown', 'pointerup'
+  ];
 
   function ensureMarkerLayer() {
     if (!extensionEnabled) return null;
@@ -1446,6 +1680,207 @@
     }, 1800);
   }
 
+  // One flag at either a clip's start or end time — identical in
+  // behavior, just which point-in-time and playFromPoint mode it
+  // represents, so a clip with an end reads as two matching flags
+  // bridged by its range underlay: `[range]`, both ends independently
+  // hoverable/clickable, mirroring the same start-plays-chained/
+  // end-jumps-and-plays-no-chaining split a row's own clickable
+  // timestamps use (see playFromPoint).
+  function buildMarkerPointer(bookmark, pct, point) {
+    const pointer = document.createElement('button');
+    pointer.type = 'button';
+    pointer.className = 'ytm-marker-pointer' + (bookmark.favorite ? ' favorite' : '') + (point === 'end' ? ' end' : '');
+    pointer.style.left = `${pct}%`;
+
+    // Stopped right at the pointer — not the layer, which doesn't cover
+    // the bar at all — so only this flag ever intercepts anything; the
+    // rest of the seek bar (including a clip's own decorative range
+    // strip) behaves exactly like stock YouTube. Without this, these
+    // events still bubble up to YouTube's own progress-bar-container
+    // listener and its native scrub-preview thumbnail shows regardless
+    // of what's painted on top of it.
+    for (const evt of STOP_PROPAGATION_EVENTS) {
+      pointer.addEventListener(evt, (e) => e.stopPropagation());
+    }
+    pointer.addEventListener('mouseenter', () => showTooltip(pointer, bookmark));
+    pointer.addEventListener('mouseleave', hideTooltip);
+    // A plain click on the flag toggles drag mode on: it stops tracking
+    // hover/click-to-play and instead follows the pointer until a second
+    // click — anywhere on the page, not just back on this flag — drops it
+    // at wherever the pointer currently is. See startMarkerFlagDrag below.
+    // Ctrl+click bypasses drag entirely and always just jumps playback
+    // there, the original click behavior — see the matching Ctrl+click
+    // check in handleMarkerDragDropClick, which cancels rather than drops
+    // an in-progress drag so a Ctrl+click never accidentally finalizes one.
+    pointer.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (e.ctrlKey) {
+        playFromPoint(bookmark, point);
+        return;
+      }
+      if (activeMarkerDrag) return;
+      startMarkerFlagDrag(pointer, bookmark, point);
+    });
+
+    return pointer;
+  }
+
+  // Click-to-drag a marker flag (start, end, or a no-end pending point) to
+  // retime it directly on the seek bar. Deliberately a click-to-pick-up /
+  // click-to-drop gesture rather than a press-and-hold drag — press-and-
+  // hold requires the mouseup to land exactly back on the flag (or a
+  // document-wide pointerup listener) to register at all, which proved
+  // unreliable; toggling on a plain click and finalizing on the *next*
+  // click anywhere sidesteps that entirely. The flag follows the pointer
+  // live (handleMarkerDragMove) with a "Drop at <time>" tooltip
+  // (showDragTooltip) so the target time is never ambiguous, Escape cancels
+  // back to the original time, and the drop-click listener runs in the
+  // capture phase specifically so it fires — and calls stopPropagation —
+  // *before* the click reaches whatever it actually landed on (another
+  // flag, the seek bar itself, a panel button), consuming that click as
+  // purely "drop here" rather than also triggering that element's own
+  // click behavior.
+  function clampDragTime(bookmark, point, time, duration) {
+    time = Math.min(Math.max(time, 0), duration);
+    if (point === 'start' && bookmark.endTime != null) time = Math.min(time, bookmark.endTime);
+    if (point === 'end' && bookmark.startTime != null) time = Math.max(time, bookmark.startTime);
+    return time;
+  }
+
+  function startMarkerFlagDrag(pointer, bookmark, point) {
+    const layer = ensureMarkerLayer();
+    if (!layer || !video || !video.duration) return;
+    const originalTime = point === 'start' ? bookmark.startTime : bookmark.endTime;
+    activeMarkerDrag = { bookmark, point, pointer, layer, duration: video.duration, time: originalTime, originalTime };
+    pointer.classList.add('dragging');
+    document.body.style.cursor = 'ew-resize';
+    // Capture phase: fires before the flag's own (or any other element's)
+    // bubble-phase listeners, so a stray hover/click over another element
+    // mid-drag can't get in the way of tracking or dropping.
+    document.addEventListener('pointermove', handleMarkerDragMove, true);
+    document.addEventListener('click', handleMarkerDragDropClick, true);
+    document.addEventListener('keydown', handleMarkerDragKeydown, true);
+    showDragTooltip(pointer, originalTime);
+  }
+
+  function updateMarkerDragTime(clientX) {
+    const { bookmark, point, pointer, layer, duration } = activeMarkerDrag;
+    const rect = layer.getBoundingClientRect();
+    const pct = Math.min(100, Math.max(0, ((clientX - rect.left) / rect.width) * 100));
+    const time = clampDragTime(bookmark, point, (pct / 100) * duration, duration);
+    activeMarkerDrag.time = time;
+    pointer.style.left = `${(time / duration) * 100}%`;
+    showDragTooltip(pointer, time);
+  }
+
+  function handleMarkerDragMove(e) {
+    if (!activeMarkerDrag) return;
+    updateMarkerDragTime(e.clientX);
+  }
+
+  function handleMarkerDragKeydown(e) {
+    if (!activeMarkerDrag) return;
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      cancelMarkerDrag();
+    }
+  }
+
+  async function handleMarkerDragDropClick(e) {
+    if (!activeMarkerDrag) return;
+    if (e.ctrlKey) {
+      // Ctrl+click is reserved for "jump and play" on a flag, never a
+      // drop — cancel the in-progress drag instead of finalizing it, and
+      // let the click keep propagating so a flag under it still gets its
+      // own Ctrl+click jump (see the click handler in buildMarkerPointer).
+      cancelMarkerDrag();
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    updateMarkerDragTime(e.clientX);
+    await finalizeMarkerDrag();
+  }
+
+  // Drag-specific tooltip: leads with "Drop at <time>" rather than the
+  // hover tooltip's plain range text, so what the drop will actually do is
+  // unambiguous while the flag is still being dragged.
+  function showDragTooltip(anchorEl, time) {
+    const tip = ensureTooltip();
+    tip.innerHTML = `<strong>Drop at ${escapeHtml(YTM_Youtube.formatTime(time))}</strong>`;
+    const rect = anchorEl.getBoundingClientRect();
+    tip.style.left = `${rect.left + rect.width / 2}px`;
+    tip.style.top = `${rect.top}px`;
+    tip.hidden = false;
+  }
+
+  function stopMarkerDragListeners() {
+    document.removeEventListener('pointermove', handleMarkerDragMove, true);
+    document.removeEventListener('click', handleMarkerDragDropClick, true);
+    document.removeEventListener('keydown', handleMarkerDragKeydown, true);
+    document.body.style.cursor = '';
+  }
+
+  function cancelMarkerDrag() {
+    if (!activeMarkerDrag) return;
+    const { pointer, duration, originalTime } = activeMarkerDrag;
+    pointer.classList.remove('dragging');
+    pointer.style.left = `${(originalTime / duration) * 100}%`;
+    stopMarkerDragListeners();
+    activeMarkerDrag = null;
+    hideTooltip();
+  }
+
+  async function finalizeMarkerDrag() {
+    if (!activeMarkerDrag) return;
+    const { bookmark, point, pointer, time, originalTime } = activeMarkerDrag;
+    pointer.classList.remove('dragging');
+    stopMarkerDragListeners();
+    activeMarkerDrag = null;
+    hideTooltip();
+    if (time == null || time === originalTime) return;
+
+    const snapshot = await captureUndoSnapshot();
+    const result = await YTM_Bookmarks.setPointTime(bookmark.id, point, time);
+    if (!result || !result.ok) return;
+    pushUndoSnapshot(snapshot);
+    await refreshPanel();
+    scheduleMarkerRender();
+
+    // Dropping a flag jumps playback there too — the same split
+    // start/end behavior a click on it always had (start chains into
+    // later bookmarks per Autoplay, end just jumps-and-plays) — using the
+    // just-dropped time rather than the pre-drag bookmark, since that's
+    // now stale.
+    await playFromPoint({ ...bookmark, [point === 'start' ? 'startTime' : 'endTime']: time }, point);
+  }
+
+  // The flag's hit-test area is clip-path'd down to its actual pole+
+  // pennant silhouette (see content.css), not a generic padded box, so
+  // two flags landing close together on the bar don't just fight over
+  // whichever DOM element happens to paint on top — but if their points
+  // in time round to close enough pixels that their triangles would
+  // still overlap outright, this staggers each subsequent one's pole a
+  // bit shorter (usedSlots buckets x-position at MARKER_STAGGER_PX
+  // granularity) so their pennants end up at different heights instead
+  // of stacked exactly atop one another, keeping each one an
+  // unambiguous, individually hoverable target.
+  const MARKER_STAGGER_PX = 10;
+  const MARKER_STAGGER_STEP = 6;
+  const MARKER_STAGGER_MAX = 4;
+  function staggerMarkerPointer(pointer, pct, layerWidth, usedSlots) {
+    const xPx = (pct / 100) * layerWidth;
+    const bucket = Math.round(xPx / MARKER_STAGGER_PX);
+    const count = usedSlots.get(bucket) || 0;
+    usedSlots.set(bucket, count + 1);
+    if (count > 0) {
+      const offset = Math.min(count, MARKER_STAGGER_MAX) * MARKER_STAGGER_STEP;
+      pointer.style.top = `${-40 + offset}px`;
+    }
+  }
+
   async function renderMarkers() {
     const layer = ensureMarkerLayer();
     if (!layer || !video || !video.duration) return;
@@ -1453,27 +1888,45 @@
 
     const clips = await getBookmarksForCurrentVideo();
     const duration = video.duration;
+    const layerWidth = layer.getBoundingClientRect().width || 1;
+    const usedSlots = new Map();
 
     for (const b of clips) {
       if (b.startTime == null) continue;
       const startPct = Math.min(100, (b.startTime / duration) * 100);
       const hasEnd = b.endTime != null;
-      const endPct = hasEnd ? Math.min(100, (b.endTime / duration) * 100) : startPct;
-      const widthPct = Math.max(hasEnd ? endPct - startPct : 0, 0);
 
-      const group = document.createElement('div');
-      group.className = 'ytm-marker-group' + (b.favorite ? ' favorite' : '') + (hasEnd ? '' : ' pending');
-      group.style.left = `${startPct}%`;
-      group.style.width = `${Math.max(widthPct, 0.4)}%`;
+      // Decorative range underlay, bridging the start/end flags below so
+      // the clip's covered span reads clearly as one bracketed range —
+      // purely visual (pointer-events: none in CSS), so it never competes
+      // with YouTube's own hover/preview on the bar; the two flags are
+      // the only interactive elements.
+      if (hasEnd) {
+        const endPct = Math.min(100, (b.endTime / duration) * 100);
+        const widthPct = Math.max(endPct - startPct, 0);
+        const range = document.createElement('div');
+        range.className = 'ytm-marker-range' + (b.favorite ? ' favorite' : '');
+        range.style.left = `${startPct}%`;
+        range.style.width = `${Math.max(widthPct, 0.2)}%`;
+        layer.appendChild(range);
 
-      group.addEventListener('mouseenter', () => showTooltip(group, b));
-      group.addEventListener('mouseleave', hideTooltip);
-      group.addEventListener('click', (e) => {
-        e.stopPropagation();
-        playFromBookmark(b);
-      });
+        const startPointer = buildMarkerPointer(b, startPct, 'start');
+        staggerMarkerPointer(startPointer, startPct, layerWidth, usedSlots);
+        layer.appendChild(startPointer);
 
-      layer.appendChild(group);
+        const endPointer = buildMarkerPointer(b, endPct, 'end');
+        staggerMarkerPointer(endPointer, endPct, layerWidth, usedSlots);
+        layer.appendChild(endPointer);
+      } else {
+        // No end set yet — round-tipped instead of a directional flag
+        // (see .ytm-marker-pointer.no-end in content.css) and tinted a
+        // shade more orange, so it's clear at a glance which clips are
+        // still just a single point in time.
+        const pointer = buildMarkerPointer(b, startPct, 'start');
+        pointer.classList.add('no-end');
+        staggerMarkerPointer(pointer, startPct, layerWidth, usedSlots);
+        layer.appendChild(pointer);
+      }
     }
   }
 
@@ -1503,9 +1956,11 @@
   }
 
   async function setup() {
+    const myGeneration = ++setupGeneration;
     const prefs = await YTM_Storage.getPreferences();
     extensionEnabled = prefs.extensionEnabled !== false;
     if (!extensionEnabled) return;
+    if (myGeneration !== setupGeneration) return;
 
     currentVideoId = YTM_Youtube.extractVideoId(location.href);
     if (!currentVideoId) return;
@@ -1517,20 +1972,68 @@
       return;
     }
 
+    // Hold playback until our own data (bookmarks, markers, panel) and
+    // initializePlayback's own "which bookmark does this land on" decision
+    // have all settled — otherwise YouTube can start playing from wherever
+    // it remembers (or time 0) for a moment before our jump catches up,
+    // which reads as a visible wrong-position flash, and with Autoplay on
+    // the eventual jump would visibly yank playback out from under
+    // whatever the user was already watching. Only worth doing when
+    // there's actually a jump to protect against: the panel is shown
+    // (extensionEnabled) and Autoplay is on — with either off, playback
+    // starts immediately as plain YouTube, exactly as before this existed.
+    // `videoEl` is captured now (not read from the `video` module var
+    // later) so this can't end up pausing/playing a *different* video's
+    // element if a newer setup() run supersedes this one mid-await —
+    // YouTube often reuses the same <video> tag across its SPA
+    // navigations, so `video` itself may have moved on by then; the
+    // myGeneration checks below are the same guard applied to every other
+    // touch of shared state in this block.
+    const holdForLoad = prefs.autoplay !== false;
+    const videoEl = video;
+    let playRequestedDuringLoad = false;
+    const holdPlaybackDuringLoad = () => {
+      playRequestedDuringLoad = true;
+      videoEl.pause();
+    };
+    if (holdForLoad) {
+      videoEl.pause();
+      videoEl.addEventListener('play', holdPlaybackDuringLoad);
+    }
+
     await waitForVideoDataMatch(currentVideoId);
+    if (myGeneration !== setupGeneration) {
+      if (holdForLoad) videoEl.removeEventListener('play', holdPlaybackDuringLoad);
+      return;
+    }
     const meta = readMetadata();
     YTM_Bookmarks.rememberVideoMeta(currentVideoId, meta.title, meta.channel, meta.channelUrl);
 
-    refreshPanel();
+    await refreshPanel();
     renderPlaylist();
-    renderMarkers();
-    initializePlayback();
+    await renderMarkers();
+    if (myGeneration !== setupGeneration) {
+      if (holdForLoad) videoEl.removeEventListener('play', holdPlaybackDuringLoad);
+      return;
+    }
+
+    if (holdForLoad) videoEl.removeEventListener('play', holdPlaybackDuringLoad);
+    await initializePlayback();
+    if (myGeneration !== setupGeneration) return;
+    if (holdForLoad && playRequestedDuringLoad && videoEl.paused) videoEl.play().catch(() => {});
+
     video.addEventListener('loadedmetadata', renderMarkers);
     videoEndedHandler = () => {
-      clearPlayQueue();
-      advanceToNextPlaylistVideo();
+      handleAutoplayEndOfQueue();
     };
     video.addEventListener('ended', videoEndedHandler);
+    resetLiveAutoplayTracking();
+    invalidateAutoplayPrefsCache();
+    invalidateAutoplayClipsCache();
+    videoTimeUpdateHandler = () => {
+      handleAutoplayTimeUpdate();
+    };
+    video.addEventListener('timeupdate', videoTimeUpdateHandler);
 
     if (!observer) {
       observer = new MutationObserver(schedulePresenceCheck);
@@ -1539,6 +2042,11 @@
   }
 
   function teardown() {
+    setupGeneration++;
+    if (activeMarkerDrag) {
+      stopMarkerDragListeners();
+      activeMarkerDrag = null;
+    }
     document.getElementById(PANEL_ID)?.remove();
     document.getElementById(PLAYLIST_PANEL_ID)?.remove();
     document.getElementById(MARKER_LAYER_ID)?.remove();
@@ -1550,8 +2058,10 @@
       video.removeEventListener('loadedmetadata', renderMarkers);
       if (videoEndedHandler) video.removeEventListener('ended', videoEndedHandler);
       videoEndedHandler = null;
-      clearPlayQueue();
+      if (videoTimeUpdateHandler) video.removeEventListener('timeupdate', videoTimeUpdateHandler);
+      videoTimeUpdateHandler = null;
     }
+    resetLiveAutoplayTracking();
   }
 
   // Bookmarks/tags/videoTags/videoRanks are stored per category, as
@@ -1565,7 +2075,9 @@
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
     const bookmarksChanged = changedKeyWithPrefix(changes, 'bookmarks::');
+    if (bookmarksChanged) invalidateAutoplayClipsCache();
     if (changes.preferences) {
+      invalidateAutoplayPrefsCache();
       const wasEnabled = extensionEnabled;
       extensionEnabled = changes.preferences.newValue?.extensionEnabled !== false;
       if (wasEnabled && !extensionEnabled) {

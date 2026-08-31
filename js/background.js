@@ -56,7 +56,10 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
 // Runs in the background service worker rather than the popup, since the
 // popup's script is killed the moment it closes and would never finish an
 // in-flight sync. Debounced so a burst of edits (e.g. typing in the raw
-// text editor) becomes one sync, not one per keystroke.
+// text editor) becomes one sync, not one per keystroke. Write-triggered
+// only — there's no chrome.alarms periodic timer and no cross-device
+// credential propagation (token/gistId are per-device local storage now),
+// so this only fires off the back of a local edit on this device.
 //
 // YTM_Sync.run() itself writes the merged result back to
 // chrome.storage.local, which would otherwise re-trigger this same
@@ -72,8 +75,6 @@ let syncInProgress = false;
 
 async function runAutosync() {
   if (syncInProgress) return;
-  const prefs = await YTM_Storage.getPreferences();
-  if (prefs.autosyncEnabled === false) return;
   syncInProgress = true;
   try {
     await YTM_Sync.run();
@@ -101,44 +102,13 @@ chrome.storage.onChanged.addListener((changes, area) => {
   autosyncTimer = setTimeout(runAutosync, AUTOSYNC_DEBOUNCE_MS);
 });
 
-// The token/gistId credentials live in chrome.storage.sync, tied to the
-// browser's signed-in Google account (see YTM_Storage.getCredentials) —
-// on a brand new device signed into that same account, Chrome delivers
-// them here as soon as its own account sync catches up, often before the
-// user ever opens the popup or options page. Kick off a pull right away
-// instead of waiting for the next 5-minute periodic tick, so bookmarks
-// show up as soon as the credentials do.
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area !== 'sync' || !changes.credentials || syncInProgress) return;
-  clearTimeout(autosyncTimer);
-  autosyncTimer = setTimeout(runAutosync, AUTOSYNC_DEBOUNCE_MS);
-});
-
-// Write-triggered autosync (above) only pushes/pulls when *this* device
-// makes a local edit — a device sitting idle would otherwise never learn
-// about a change (e.g. a tag delete) made on another device until it next
-// writes something itself or the user clicks "⟲ Sync". A periodic pull
-// closes that gap so idle devices pick up remote changes on their own.
-const PERIODIC_SYNC_ALARM = 'ytm-periodic-sync';
-const PERIODIC_SYNC_MINUTES = 5;
-
-chrome.runtime.onInstalled.addListener(() => {
-  chrome.alarms.create(PERIODIC_SYNC_ALARM, { periodInMinutes: PERIODIC_SYNC_MINUTES });
-});
-chrome.runtime.onStartup.addListener(() => {
-  chrome.alarms.create(PERIODIC_SYNC_ALARM, { periodInMinutes: PERIODIC_SYNC_MINUTES });
-});
-chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === PERIODIC_SYNC_ALARM) runAutosync();
-});
-
 // --- messages from content scripts --------------------------------------
 //
 // The in-page panel's Library/Sync/Settings buttons need chrome.tabs and
 // chrome.runtime.openOptionsPage, neither of which is available to content
 // scripts — they route through here instead. Sync reuses the same
 // syncInProgress guard as autosync so a manual click can't race a
-// debounced/periodic run.
+// debounced run.
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === 'ytm-open-library') {
     chrome.tabs.create({ url: chrome.runtime.getURL('manage.html') });

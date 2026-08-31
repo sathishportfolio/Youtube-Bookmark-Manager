@@ -169,6 +169,29 @@ body.manage-page #controls #videoSortSelect {
 .tag-chip-remove:hover {
   color: #dc2626;
 }
+.reorder-buttons {
+  display: inline-flex;
+  flex-direction: column;
+  margin-right: 2px;
+  line-height: 0;
+}
+.reorder-btn {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 7px;
+  line-height: 1;
+  padding: 0;
+}
+.reorder-btn:hover:not(:disabled) {
+  color: var(--accent);
+}
+.reorder-btn:disabled {
+  color: var(--muted);
+  opacity: 0.3;
+  cursor: default;
+}
 .tag-chip-name {
   cursor: pointer;
 }

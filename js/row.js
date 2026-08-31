@@ -124,6 +124,183 @@ const YTM_Row = {
     return wrap;
   },
 
+  // Per-video alias (custom display title) button + inline editor, shared
+  // by the in-page panel, the in-page playlist panel, and the Library
+  // page — same self-contained shape as buildNotesControl above (loads/
+  // saves through YTM_Bookmarks.getVideoInfo/saveAlias, caller only needs
+  // a videoId), and reuses the same floating-editor positioning/outside-
+  // click-to-save mechanics rather than duplicating them for a single
+  // text input.
+  //
+  // YTM_Bookmarks.saveAlias never stores an alias equal to the real
+  // YouTube title, so "no alias" and "alias same as title" collapse to
+  // the same empty-string state — this control (and any title display
+  // reading `alias`) never needs to compare the two itself.
+  buildAliasControl(videoId, alignLeftTo) {
+    const wrap = document.createElement('span');
+    wrap.className = 'ytm-alias-wrap';
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'ytm-icon-btn ytm-alias-btn';
+    btn.title = 'Add custom title';
+    btn.textContent = '🏷️';
+
+    const editorWrap = document.createElement('div');
+    editorWrap.className = 'ytm-alias-editor-wrap';
+    editorWrap.hidden = true;
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'ytm-alias-editor';
+    input.placeholder = 'Custom title (optional)';
+    input.spellcheck = false;
+
+    editorWrap.append(input);
+    wrap.append(btn);
+
+    function setIndicator(alias) {
+      const has = !!(alias && alias.trim());
+      btn.classList.toggle('active', has);
+      btn.title = has ? 'Edit custom title' : 'Add custom title';
+    }
+
+    async function refreshFromStorage() {
+      const info = await YTM_Bookmarks.getVideoInfo(videoId);
+      if (editorWrap.hidden) input.value = info.alias || '';
+      setIndicator(info.alias);
+    }
+    refreshFromStorage();
+    wrap.refreshAliasIndicator = refreshFromStorage;
+
+    const save = async () => {
+      await YTM_Bookmarks.saveAlias(videoId, input.value);
+      await refreshFromStorage();
+    };
+
+    function positionEditor() {
+      const width = Math.min(260, window.innerWidth - 16);
+      const btnRect = btn.getBoundingClientRect();
+      let left = alignLeftTo ? alignLeftTo.getBoundingClientRect().left : btnRect.right - width;
+      left = Math.max(8, Math.min(left, window.innerWidth - width - 8));
+      editorWrap.style.width = `${width}px`;
+      editorWrap.style.left = `${left + window.scrollX}px`;
+      editorWrap.style.top = `${btnRect.bottom + 4 + window.scrollY}px`;
+    }
+
+    let outsideClickArmed = false;
+    function handleOutsideClick(e) {
+      if (wrap.contains(e.target) || editorWrap.contains(e.target)) return;
+      save();
+      close();
+    }
+
+    function open() {
+      document.body.appendChild(editorWrap);
+      positionEditor();
+      editorWrap.hidden = false;
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+      if (!outsideClickArmed) {
+        outsideClickArmed = true;
+        setTimeout(() => document.addEventListener('click', handleOutsideClick, true), 0);
+      }
+    }
+    function close() {
+      editorWrap.hidden = true;
+      editorWrap.remove();
+      if (outsideClickArmed) {
+        document.removeEventListener('click', handleOutsideClick, true);
+        outsideClickArmed = false;
+      }
+    }
+
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (editorWrap.hidden) {
+        open();
+      } else {
+        save();
+        close();
+      }
+    });
+
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        save();
+        close();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        refreshFromStorage();
+        close();
+      }
+    });
+
+    return wrap;
+  },
+
+  // Whole-video favorite star, shared by the Library page and the in-page
+  // Playlist panel — the video-level counterpart to a clip's own favorite
+  // star (see the `star` button in `render` below). Unlike buildNotesControl/
+  // buildAliasControl there's no editor popover needed for a single
+  // boolean, so this is just a self-contained toggle button: click flips
+  // it, saves through YTM_Bookmarks.saveVideoFavorite immediately (with an
+  // optimistic UI flip first, same as a clip's own star), caller only
+  // needs a videoId and the current value. Purely a visual marker — same
+  // as a clip's favorite, it doesn't reorder or filter the video list.
+  buildVideoFavoriteToggle(videoId, favorite) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'ytm-icon-btn ytm-video-star' + (favorite ? ' active' : '');
+    btn.title = favorite ? 'Unfavorite video' : 'Favorite video';
+    btn.textContent = favorite ? '★' : '☆';
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const next = !btn.classList.contains('active');
+      btn.classList.toggle('active', next);
+      btn.title = next ? 'Unfavorite video' : 'Favorite video';
+      btn.textContent = next ? '★' : '☆';
+      await YTM_Bookmarks.saveVideoFavorite(videoId, next);
+    });
+    return btn;
+  },
+
+  // Renders a video's title (as a link) for the header contexts that show
+  // it (Library page, popup, in-page playlist panel): if an alias is set,
+  // it becomes the bold primary heading and the real YouTube title is
+  // shown underneath in a smaller/muted line so the two are never
+  // mistaken for one another; with no alias, this is just the plain
+  // title link, unchanged from before aliases existed. Either way, the
+  // channel line the caller appends after this stays visually distinct
+  // (its own existing class) — this never touches channel markup.
+  buildTitleDisplay({ title, url, alias }) {
+    const block = document.createElement('div');
+    block.className = 'ytm-title-display';
+
+    const titleLink = document.createElement('a');
+    titleLink.href = url;
+    titleLink.target = '_blank';
+    titleLink.rel = 'noopener';
+    titleLink.textContent = title;
+
+    if (alias && alias.trim()) {
+      titleLink.className = 'ytm-original-title';
+      const aliasLink = document.createElement('a');
+      aliasLink.href = url;
+      aliasLink.target = '_blank';
+      aliasLink.rel = 'noopener';
+      aliasLink.className = 'ytm-alias-title';
+      aliasLink.textContent = alias;
+      block.append(aliasLink, titleLink);
+    } else {
+      titleLink.className = 'ytm-plain-title';
+      block.append(titleLink);
+    }
+
+    return block;
+  },
+
   // Builds the clickable start/end range display shared by both the full
   // and minimal rows: start plays from there, end plays from there, and
   // the duration (if an end is set) shows visibly in parentheses after it.

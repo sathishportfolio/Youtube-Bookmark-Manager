@@ -30,14 +30,6 @@ async function load() {
     ? `Last synced: ${new Date(settings.lastSyncedAt).toLocaleString()}`
     : 'Never synced yet.';
   updateGistLink(settings.gistId);
-
-  const prefs = await YTM_Storage.getPreferences();
-  document.getElementById('autosyncEnabledInput').checked = prefs.autosyncEnabled !== false;
-}
-
-async function toggleAutosyncEnabled(e) {
-  const prefs = await YTM_Storage.getPreferences();
-  await YTM_Storage.savePreferences({ ...prefs, autosyncEnabled: e.target.checked, updatedAt: Date.now() });
 }
 
 async function save() {
@@ -221,7 +213,6 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('saveBtn').addEventListener('click', save);
   document.getElementById('testBtn').addEventListener('click', test);
   document.getElementById('resetFromGistBtn').addEventListener('click', resetFromGist);
-  document.getElementById('autosyncEnabledInput').addEventListener('change', toggleAutosyncEnabled);
   document.getElementById('deleteDataOnlyBtn').addEventListener('click', deleteDataOnly);
   document.getElementById('deleteAllBtn').addEventListener('click', deleteAllData);
   document.getElementById('libraryLink').addEventListener('click', (e) => {
@@ -229,14 +220,12 @@ document.addEventListener('DOMContentLoaded', () => {
     chrome.tabs.create({ url: chrome.runtime.getURL('manage.html') });
   });
 
-  // The token/gistId credentials live in chrome.storage.sync (tied to the
-  // signed-in account, not this device — see YTM_Storage.getCredentials),
-  // so they can arrive here without any local write at all — e.g. this
-  // page sitting open on a fresh device right as its first account sync
-  // catches up. Only refresh the fields the user isn't actively editing,
-  // so an in-progress edit here doesn't get clobbered mid-typing.
+  // Credentials can change from outside this page's own form (e.g. a reset
+  // from Gist, or another window's Settings page). Only refresh the fields
+  // the user isn't actively editing, so an in-progress edit here doesn't
+  // get clobbered mid-typing.
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area !== 'sync' || !changes.credentials) return;
+    if (area !== 'local' || !changes.credentials) return;
     if (document.activeElement !== document.getElementById('tokenInput') && document.activeElement !== document.getElementById('gistIdInput')) {
       load();
     }

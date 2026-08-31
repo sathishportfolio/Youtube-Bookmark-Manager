@@ -113,6 +113,42 @@ function bindClickAndDblClick(el, onClick, onDblClick) {
   });
 }
 
+// Small ▲▼ pair for a chip in a manually-orderable list (category bar,
+// tag bar) — shared shape, callers just supply what "move" means for
+// their list (YTM_Categories.moveCategory / YTM_Tags.moveTag) and
+// whether this item is already at either edge. Clicking either button
+// never bubbles to the chip's own click handler (which would otherwise
+// also fire e.g. a category switch or a tag filter toggle).
+function buildReorderButtons({ disableUp, disableDown, onMoveUp, onMoveDown }) {
+  const wrap = document.createElement('span');
+  wrap.className = 'reorder-buttons';
+
+  const upBtn = document.createElement('button');
+  upBtn.type = 'button';
+  upBtn.className = 'reorder-btn';
+  upBtn.textContent = '▲';
+  upBtn.title = 'Move up';
+  upBtn.disabled = !!disableUp;
+  upBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    onMoveUp();
+  });
+
+  const downBtn = document.createElement('button');
+  downBtn.type = 'button';
+  downBtn.className = 'reorder-btn';
+  downBtn.textContent = '▼';
+  downBtn.title = 'Move down';
+  downBtn.disabled = !!disableDown;
+  downBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    onMoveDown();
+  });
+
+  wrap.append(upBtn, downBtn);
+  return wrap;
+}
+
 function setStatus(msg, isError = false) {
   const el = document.getElementById('statusMsg');
   el.textContent = msg;
@@ -148,7 +184,7 @@ function matchesFilter(group, query) {
   if (selectedTagFilters.size > 0 && !group.tags.some((t) => selectedTagFilters.has(t.id))) return false;
   if (!query) return true;
   const q = query.toLowerCase();
-  const haystack = [group.title, group.channel, ...group.clips.map((c) => c.label)].join(' ').toLowerCase();
+  const haystack = [group.title, group.alias, group.channel, ...group.clips.map((c) => c.label)].join(' ').toLowerCase();
   return haystack.includes(q);
 }
 
@@ -527,10 +563,7 @@ async function renderVideoGroup(group) {
 
   const meta = document.createElement('div');
   meta.className = 'video-meta';
-  const title = document.createElement('a');
-  title.href = group.url;
-  title.target = '_blank';
-  title.textContent = group.title;
+  const titleDisplay = YTM_Row.buildTitleDisplay(group);
   // Clickable straight to the channel's Playlists tab when we know its
   // URL (captured alongside title on the video's own watch page — see
   // js/content.js's readChannelUrl); older bookmarks made before that
@@ -546,12 +579,18 @@ async function renderVideoGroup(group) {
   }
   const count = document.createElement('div');
   count.className = 'video-clip-count';
-  count.textContent = `${group.clips.length} bookmark${group.clips.length === 1 ? '' : 's'}`;
+  const totalDuration = YTM_Bookmarks.totalDurationLabel(group.clips);
+  count.textContent = `${group.clips.length} bookmark${group.clips.length === 1 ? '' : 's'}${totalDuration ? ` · ${totalDuration} total` : ''}`;
   const rankRow = document.createElement('div');
   rankRow.className = 'video-rank-row';
-  rankRow.append(buildVideoRankBadge(group), YTM_Row.buildNotesControl(group.videoId));
+  rankRow.append(
+    buildVideoRankBadge(group),
+    YTM_Row.buildVideoFavoriteToggle(group.videoId, group.favorite),
+    YTM_Row.buildAliasControl(group.videoId),
+    YTM_Row.buildNotesControl(group.videoId)
+  );
 
-  meta.append(rankRow, title, channel, count, buildVideoTagsRow(group));
+  meta.append(rankRow, titleDisplay, channel, count, buildVideoTagsRow(group));
 
   header.append(checkbox, img, meta);
   section.appendChild(header);
@@ -655,10 +694,33 @@ async function renderCategoryBar() {
   const bar = document.getElementById('categoryBar');
   bar.innerHTML = '';
 
+  // Reorder position among non-Default categories only — the Default
+  // category is always pinned first (see YTM_Categories.getAll) and
+  // can't be moved itself, so it's excluded from this indexing entirely.
+  const movableCategories = categoriesCache.filter((c) => c.id !== YTM_Storage.DEFAULT_CATEGORY_ID);
+
   for (const category of categoriesCache) {
     const isDefault = category.id === YTM_Storage.DEFAULT_CATEGORY_ID;
     const chip = document.createElement('span');
     chip.className = 'tag-chip tag-chip-removable tag-filter-chip' + (category.id === activeCategoryId ? ' active' : '');
+
+    if (!isDefault) {
+      const movableIndex = movableCategories.findIndex((c) => c.id === category.id);
+      chip.appendChild(
+        buildReorderButtons({
+          disableUp: movableIndex <= 0,
+          disableDown: movableIndex === movableCategories.length - 1,
+          onMoveUp: async () => {
+            await YTM_Categories.moveCategory(category.id, 'up');
+            await renderList();
+          },
+          onMoveDown: async () => {
+            await YTM_Categories.moveCategory(category.id, 'down');
+            await renderList();
+          }
+        })
+      );
+    }
 
     const nameEl = document.createElement('span');
     nameEl.className = 'tag-chip-name';
@@ -806,20 +868,15 @@ async function selectAllFiltered() {
 
 async function renderTagBar() {
   const toggleBtn = document.getElementById('tagToggleBtn');
-  const section = document.getElementById('tagSection');
   const bar = document.getElementById('tagBar');
 
-  // No tags in this category at all — hide the toggle entirely rather than
-  // leaving a button that opens onto an empty section. Whether the section
-  // itself is open otherwise is left alone here (only the toggle button's
-  // click handler changes that), so a re-render triggered by an unrelated
-  // change doesn't silently re-collapse a section the user just opened.
-  toggleBtn.hidden = allTagsCache.length === 0;
-  if (allTagsCache.length === 0) {
-    section.hidden = true;
-    bar.innerHTML = '';
-    return;
-  }
+  // Always shown, even with zero tags in this category — otherwise
+  // there's no way to discover or open the tag bar's own "+ New tag"
+  // chip to create a category's very first tag. Whether the section
+  // itself is open is left alone here (only the toggle button's own
+  // click handler changes that), so a re-render triggered by an
+  // unrelated change doesn't silently re-collapse a section the user
+  // just opened.
   toggleBtn.textContent = selectedTagFilters.size > 0 ? `Tags (${selectedTagFilters.size})` : 'Tags';
   toggleBtn.classList.toggle('active', selectedTagFilters.size > 0);
 
@@ -827,10 +884,35 @@ async function renderTagBar() {
   const sorted = await YTM_Tags.getAllTags(activeCategoryId, tagSort);
   const query = tagQuery.trim().toLowerCase();
   const filtered = query ? sorted.filter((t) => t.name.toLowerCase().includes(query)) : sorted;
+  // The custom order itself, independent of tagSort — reorder buttons
+  // always move a tag within this order (see YTM_Tags.moveTag), even
+  // when displayed sorted some other way, so their up/down-disabled
+  // edges need this regardless of what's currently shown.
+  const customOrder = await YTM_Tags.getAllTags(activeCategoryId, 'custom');
 
   for (const tag of filtered) {
     const chip = document.createElement('span');
     chip.className = 'tag-chip tag-chip-removable tag-filter-chip' + (selectedTagFilters.has(tag.id) ? ' active' : '');
+
+    const customIndex = customOrder.findIndex((t) => t.id === tag.id);
+    chip.appendChild(
+      buildReorderButtons({
+        disableUp: customIndex <= 0,
+        disableDown: customIndex === customOrder.length - 1,
+        onMoveUp: async () => {
+          await YTM_Tags.moveTag(activeCategoryId, tag.id, 'up');
+          tagSort = 'custom';
+          document.getElementById('tagSortSelect').value = 'custom';
+          await renderList();
+        },
+        onMoveDown: async () => {
+          await YTM_Tags.moveTag(activeCategoryId, tag.id, 'down');
+          tagSort = 'custom';
+          document.getElementById('tagSortSelect').value = 'custom';
+          await renderList();
+        }
+      })
+    );
 
     const nameEl = document.createElement('span');
     nameEl.className = 'tag-chip-name';
@@ -1026,9 +1108,9 @@ async function toggleAutoplay() {
   await refreshAutoplayButton();
 }
 
-// Green: configured and the last sync attempt (manual, autosync, or the
-// periodic background pull) succeeded. Red: not configured yet, or the
-// last attempt failed — see settings.lastSyncError, set by YTM_Sync.run().
+// Green: configured and the last manual sync succeeded. Red: not
+// configured yet, or the last attempt failed — see settings.lastSyncError,
+// set by YTM_Sync.run().
 async function refreshSyncStatus() {
   const settings = await YTM_Storage.getSettings();
   const dot = document.getElementById('syncDot');
@@ -1187,17 +1269,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   // list changes (create/rename/delete, e.g. from another device) also
   // need a re-render since renderList() is what refreshes categoriesCache.
   chrome.storage.onChanged.addListener((changes, area) => {
-    // The token/gistId credentials live in chrome.storage.sync (tied to
-    // the signed-in account, not this device — see
-    // YTM_Storage.getCredentials), so they can change without any local
-    // write at all, e.g. arriving from another device.
-    if (area === 'sync' && changes.credentials) refreshSyncStatus();
     if (area !== 'local') return;
     const relevant =
       Object.keys(changes).some((k) => k.startsWith('bookmarks::') || k.startsWith('tags::') || k.startsWith('videoTags::') || k.startsWith('videoInfo::') || k.startsWith('videoRanks::')) ||
       changes.categories ||
       changes.categoriesLastModified;
     if (relevant) renderList();
-    if (changes.settings) refreshSyncStatus();
+    if (changes.settings || changes.credentials) refreshSyncStatus();
   });
 });

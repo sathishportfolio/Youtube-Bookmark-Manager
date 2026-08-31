@@ -114,13 +114,13 @@ content.css             Styles for the in-page panel and seek-bar markers
 js/
   storage.js            chrome.storage.local wrapper (bookmarks by video id, last-modified map, tags, settings, preferences, video meta cache, pending-play)
   gist.js               GitHub Gist API client + per-video merge logic
-  sync.js                One shared sync routine (fetch, merge, save, push) used by autosync and every manual Sync button
+  sync.js                One shared sync routine (fetch, merge, save, push) used by every manual Sync button
   youtube.js              Video ID extraction, thumbnail/time helpers, page metadata scraping
   bookmarks.js             Shared bookmark logic: id scheme, time/raw-text parsing, favorite/mark/save/delete mutations
   tags.js                   Global tag CRUD + per-video tag assignment
   row.js                     Shared bookmark-row UI component (full + minimal variants)
   content.js                  Injected into YouTube watch pages: bookmark panel, seek-bar markers, resume/play messaging
-  background.js                Service worker: right-click quick-add actions, debounced autosync on storage changes
+  background.js                Service worker: right-click quick-add actions, manual-sync message handler
   popup.js                      Popup UI logic — current video only
   manage.js                      Library page logic — all videos, tags, collapsible per video
   options.js                      Settings page logic
@@ -196,7 +196,8 @@ bookmarks, tags, or preferences schedules a debounced sync (`js/sync.js`'s
 `YTM_Sync.run()`) from the background service worker a couple of seconds
 later, batching bursts of edits into one sync. The popup and Library pages'
 **⟲ Sync** button calls the same routine immediately, for when you want to
-force a sync right away (e.g. to pull in a change made on another device).
+force a sync right away (e.g. to pull in a change made on another device
+after you've entered the same token/Gist ID there).
 
 ### Raw text format
 
